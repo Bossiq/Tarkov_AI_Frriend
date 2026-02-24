@@ -35,9 +35,11 @@ class TwitchBot(commands.Bot):
 
         if self.message_callback:
             # Pass message to the main system
-            # We must await the callback if it's async, or use thread if sync
-            # To keep it simple, we assume the callback handles the orchestration
-            self.message_callback(message.author.name, message.content)
+            import asyncio
+            if asyncio.iscoroutinefunction(self.message_callback):
+                await self.message_callback(message.author.name, message.content)
+            else:
+                self.message_callback(message.author.name, message.content)
 
         await self.handle_commands(message)
 

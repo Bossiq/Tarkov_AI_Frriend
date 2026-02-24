@@ -28,16 +28,15 @@ class SCAVESystem:
         # Hook up twitch chat callback
         self.twitch_bot.set_callback(self.on_twitch_message)
 
-    def on_twitch_message(self, author, content):
+    async def on_twitch_message(self, author, content):
         """Handles a message from Twitch chat."""
         # We can implement a wake word or simple mention detection
         if "scav" in content.lower() or "blyat" in content.lower():
             # Quick async dispatch - generate response and speak it
             prompt = f"User {author} said: '{content}'. Respond to them."
-            # Note: since this is called from TwitchIO event loop, blocking calls 
-            # like generate_response and speak will block the bot. 
-            # In a full production app, use asyncio.to_thread.
-            threading.Thread(target=self.process_interaction, args=(prompt,)).start()
+            import asyncio
+            # Offload processing to a separate thread safely via asyncio event loop
+            asyncio.create_task(asyncio.to_thread(self.process_interaction, prompt, True, False))
 
     def process_interaction(self, text_prompt=None, use_audio=False, use_video=False):
         """Core interaction loop capturing necessary inputs and getting AI response."""
@@ -101,5 +100,10 @@ class SCAVESystem:
             print("Done. Goodbye, Blyat.")
 
 if __name__ == "__main__":
+    import asyncio
+    # Create and set an event loop for the main thread so TwitchIO can attach to it during init
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
     system = SCAVESystem()
     system.run()

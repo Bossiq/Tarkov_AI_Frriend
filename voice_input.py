@@ -1,29 +1,36 @@
-import sounddevice as sd
-import soundfile as sf
-import numpy as np
+import speech_recognition as sr
 import time
 
 class VoiceInput:
-    def __init__(self, samplerate=44100, channels=1):
-        self.samplerate = samplerate
-        self.channels = channels
+    def __init__(self):
+        self.recognizer = sr.Recognizer()
 
-    def record_audio(self, duration=5, timeout=5, phrase_time_limit=10, output_filename="temp_audio.wav"):
-        """Records audio for a given duration and saves it to a WAV file."""
-        # Use timeout or phrase_time_limit properties to dictate maximum sounddevice listening duration
-        max_duration = min(timeout, phrase_time_limit) if timeout and phrase_time_limit else duration
-        print(f"Recording audio for {max_duration} seconds... Speak now!")
-        try:
-            # sd.rec is blocking until the recording is finished if we wait for it.
-            myrecording = sd.rec(int(duration * self.samplerate), samplerate=self.samplerate, channels=self.channels, dtype='float64')
-            sd.wait()  # Wait until recording is finished
-            print("Recording stopped. Saving...")
-            sf.write(output_filename, myrecording, self.samplerate)
-            print(f"Saved audio to {output_filename}")
-            return output_filename
-        except Exception as e:
-            print(f"Error recording audio: {e}")
-            return None
+    def record_audio(self, timeout=5, phrase_time_limit=10, output_filename="temp_audio.wav"):
+        """Records audio from the microphone and saves it to a WAV file."""
+        with sr.Microphone() as source:
+            print('\n[SCAV-E] Microphone active. Speak now...')
+            self.recognizer.adjust_for_ambient_noise(source, duration=1)
+            try:
+                # Listen for the user's input
+                audio_data = self.recognizer.listen(source, timeout=timeout, phrase_time_limit=phrase_time_limit)
+                print('[SCAV-E] Processing audio...')
+                
+                # Write audio to a WAV file
+                with open(output_filename, "wb") as f:
+                    f.write(audio_data.get_wav_data())
+                
+                return output_filename
+            except sr.WaitTimeoutError:
+                print("Listening timed out. No speech detected.")
+                return None
+            except Exception as e:
+                print(f"Error recording audio: {e}")
+                return None
+
+if __name__ == "__main__":
+    # Simple test
+    vi = VoiceInput()
+    vi.record_audio(timeout=5, phrase_time_limit=10, output_filename="test_audio.wav")
 
 if __name__ == "__main__":
     # Simple test

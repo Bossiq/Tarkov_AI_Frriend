@@ -104,6 +104,8 @@ class SCAVESystem:
                     "Run: brew services start ollama"
                 )
                 return
+            # Calibrate mic to ambient noise on first start
+            self._vi.calibrate(gui_log=self._gui.log)
             t = threading.Thread(
                 target=self._listening_thread, name="ListenThread", daemon=True
             )
@@ -149,8 +151,6 @@ class SCAVESystem:
         use_audio: bool = False,
         use_video: bool = False,
     ) -> None:
-        image_path: Optional[str] = None
-
         if self._brain is None:
             return
 
@@ -188,26 +188,12 @@ class SCAVESystem:
         if not text_prompt:
             return
 
-        # ── Video capture (optional) ──────────────────────────────────
-        if use_video:
-            frame = self._vc.get_frame()
-            if frame is not None:
-                try:
-                    import cv2
-
-                    cv2.imwrite(self._latest_frame_path, frame)
-                    image_path = self._latest_frame_path
-                except ImportError:
-                    logger.warning("cv2 not available for frame write")
-
-        # ── Generate response ─────────────────────────────────────────
+        # ── Stream response sentence-by-sentence ──────────────────────
         self._gui.set_status("Thinking…")
         self._gui.log("🧠 Generating response …")
-        response = self._brain.generate_response(text_prompt=text_prompt)
 
-        # ── Speak ─────────────────────────────────────────────────────
         self._gui.set_status("Speaking…")
-        self._vo.speak(response)
+        self._vo.speak_streamed(self._brain.stream_sentences(text_prompt))
         self._gui.set_status("Listening…" if self._running else "Offline")
 
 

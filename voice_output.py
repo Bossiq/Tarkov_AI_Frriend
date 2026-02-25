@@ -2,9 +2,8 @@
 Voice Output — high-quality TTS via Kokoro (ONNX) for PMC Overwatch.
 
 Uses the Kokoro 82M neural TTS model running locally via ONNX Runtime.
+Supports sentence-by-sentence streaming for low-latency speech.
 Falls back to the macOS ``say`` command if Kokoro fails to initialise.
-
-Model files are auto-downloaded on first run to the ``models/`` directory.
 """
 
 import logging
@@ -12,7 +11,7 @@ import os
 import subprocess
 import urllib.request
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Generator, Optional
 
 import numpy as np
 import sounddevice as sd
@@ -28,8 +27,8 @@ _ONNX_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model
 _VOICES_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin"
 
 # ── Defaults ─────────────────────────────────────────────────────────
-_DEFAULT_VOICE = "am_michael"
-_DEFAULT_SPEED = 1.0
+_DEFAULT_VOICE = "af_heart"
+_DEFAULT_SPEED = 1.1
 _DEFAULT_LANG = "en-us"
 _SAY_TIMEOUT_S = 30
 
@@ -92,6 +91,27 @@ class VoiceOutput:
         else:
             self._speak_say(clean_text)
 
+    def speak_streamed(self, sentences: Generator[str, None, None]) -> None:
+        """Speak sentences as they arrive from the streaming LLM.
+
+        Each sentence is synthesized and played immediately,
+        so the user hears the first sentence while the rest generates.
+        """
+        full_response = []
+        for sentence in sentences:
+            if not sentence.strip():
+                continue
+            full_response.append(sentence)
+
+            if self._kokoro is not None:
+                self._speak_kokoro(sentence)
+            else:
+                self._speak_say(sentence)
+
+        # Log the complete response to GUI
+        if self._gui_callback and full_response:
+            self._gui_callback(f"🎙 PMC: {' '.join(full_response)}")
+
     # ── Kokoro speech ─────────────────────────────────────────────────
     def _speak_kokoro(self, text: str) -> None:
         """Generate speech with Kokoro and play it through speakers."""
@@ -99,10 +119,8 @@ class VoiceOutput:
             samples, sample_rate = self._kokoro.create(
                 text, voice=self._voice, speed=self._speed, lang=_DEFAULT_LANG
             )
-            # Play audio synchronously through the default output device
             sd.play(samples, samplerate=sample_rate)
             sd.wait()
-            logger.debug("Kokoro TTS playback complete")
         except Exception:
             logger.exception("Kokoro TTS failed — falling back to 'say'")
             self._speak_say(text)

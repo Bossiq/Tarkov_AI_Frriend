@@ -25,8 +25,8 @@ logger = logging.getLogger(__name__)
 
 # ── Constants ────────────────────────────────────────────────────────
 _DEFAULT_MODEL = "qwen2.5:3b"
-_DEFAULT_NUM_CTX = 2048         # Room for quest reference + conversation
-_DEFAULT_NUM_PREDICT = 80       # Enough for detailed quest answers
+_DEFAULT_NUM_CTX = 4096         # Room for full quest reference + conversation
+_DEFAULT_NUM_PREDICT = 100      # Enough for detailed quest answers
 _DEFAULT_TEMPERATURE = 0.5
 _DEFAULT_TOP_P = 0.85
 _DEFAULT_REPEAT_PENALTY = 1.15

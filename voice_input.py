@@ -1,18 +1,20 @@
 """
-Voice Input — microphone capture with adaptive VAD + local transcription.
+Voice input — mic capture with adaptive VAD + local Whisper STT.
 
-Key design:
-  • Ring buffer keeps audio BEFORE speech confirmed (preserves first word)
-  • Adaptive silence: tracks speech volume, silence = big drop from peak
-  • Robust: uses volume-relative silence detection, not absolute threshold
-  • Transcription via faster-whisper (local, offline)
+Uses CALLBACK-BASED audio capture to prevent blocking.
+The `stream.read()` approach can block indefinitely when mic hardware
+stalls after TTS playback. This version uses a callback that puts
+chunks into a queue, with `queue.get(timeout=0.2)` ensuring the
+main loop always progresses and timeout checks fire reliably.
 """
 
 import logging
 import os
-import time
+import queue
 import threading
+import time
 from collections import deque
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
@@ -21,17 +23,18 @@ import soundfile as sf
 
 logger = logging.getLogger(__name__)
 
-# ── Defaults ─────────────────────────────────────────────────────────
+# ── Constants ────────────────────────────────────────────────────────
 _SAMPLERATE = 16_000
 _CHANNELS = 1
 _CHUNK_SECONDS = 0.1
-_SILENCE_DURATION = 1.2           # 1.2s quiet = done talking
-_MAX_RECORDING_SECONDS = 15       # Hard cap — prevents infinite recording
+_SILENCE_DURATION = 1.2
+_MAX_RECORDING_SECONDS = 15
 _CALIBRATION_SECONDS = 1.0
-_NOISE_MULTIPLIER = 3.0           # Higher = less sensitive to noise
+_NOISE_MULTIPLIER = 3.0
 _MIN_SPEECH_CHUNKS = 2
-_PRE_BUFFER_CHUNKS = 6            # 600ms pre-speech
-_SILENCE_FACTOR = 0.4             # Silence = RMS drops to 40% of speech avg
+_PRE_BUFFER_CHUNKS = 6
+_SILENCE_FACTOR = 0.4
+_QUEUE_TIMEOUT = 0.2             # Never block longer than 200ms
 _DEFAULT_WHISPER_MODEL = "base"
 _DEFAULT_COMPUTE_TYPE = "int8"
 
@@ -54,29 +57,24 @@ class VoiceInput:
         self.max_duration = max_duration
         self._shutdown = shutdown_event or threading.Event()
         self._gui_log = gui_log
+        self._chunk_size = int(samplerate * _CHUNK_SECONDS)
         self._threshold: Optional[float] = None
-        self._chunk_size = int(self.samplerate * _CHUNK_SECONDS)
         self._whisper_model = None
         self._whisper_lock = threading.Lock()
+        self._audio_q: queue.Queue = queue.Queue()
 
-    # ── Whisper model loading ─────────────────────────────────────────
     def _get_whisper_model(self):
-        if self._whisper_model is not None:
-            return self._whisper_model
-        with self._whisper_lock:
-            if self._whisper_model is not None:
-                return self._whisper_model
-            model_name = os.getenv("WHISPER_MODEL", _DEFAULT_WHISPER_MODEL)
-            compute_type = os.getenv("WHISPER_COMPUTE_TYPE", _DEFAULT_COMPUTE_TYPE)
-            if self._gui_log:
-                self._gui_log(f"🤖 Loading speech model ({model_name}) …")
-            logger.info("Loading faster-whisper '%s' (compute=%s) …", model_name, compute_type)
-            from faster_whisper import WhisperModel
-            self._whisper_model = WhisperModel(model_name, device="cpu", compute_type=compute_type)
-            if self._gui_log:
-                self._gui_log("🤖 Speech model loaded ✅")
-            logger.info("Whisper model loaded")
-            return self._whisper_model
+        if self._whisper_model is None:
+            with self._whisper_lock:
+                if self._whisper_model is None:
+                    model = os.getenv("WHISPER_MODEL", _DEFAULT_WHISPER_MODEL)
+                    compute = os.getenv("WHISPER_COMPUTE_TYPE", _DEFAULT_COMPUTE_TYPE)
+                    logger.info("Loading faster-whisper '%s' (compute=%s) …", model, compute)
+                    from faster_whisper import WhisperModel
+                    self._whisper_model = WhisperModel(
+                        model, device="cpu", compute_type=compute)
+                    logger.info("Whisper model loaded")
+        return self._whisper_model
 
     # ── Noise calibration ─────────────────────────────────────────────
     def calibrate(self, gui_log=None) -> float:
@@ -104,23 +102,34 @@ class VoiceInput:
         if gui_log:
             gui_log(f"🔊 Calibrated (threshold: {self._threshold:.3f})")
 
-        # Pre-load Whisper
         threading.Thread(target=self._get_whisper_model, name="WhisperLoad", daemon=True).start()
         return self._threshold
 
-    # ── Main listening loop ───────────────────────────────────────────
+    # ── Audio callback (runs on OS audio thread) ──────────────────────
+    def _audio_callback(self, indata, frames, time_info, status):
+        """Called by sounddevice for each audio block. Never blocks."""
+        if status:
+            logger.debug("Audio status: %s", status)
+        self._audio_q.put(indata.copy())
+
+    # ── Main listening loop (CALLBACK-BASED — never blocks) ───────────
     def listen(self, output_filename: str = "temp_audio.wav") -> Optional[str]:
         """Block until speech detected, recorded, and speaker goes quiet.
 
-        Uses:
-          1. Ring buffer to keep pre-speech audio (first word preserved)
-          2. Adaptive silence: tracks average speech volume, considers
-             silence when RMS drops to 30% of running speech average
+        Uses callback-based audio capture with queue.get(timeout) to ensure
+        timeout safety checks ALWAYS fire, even if mic hardware stalls.
         """
         if self._threshold is None:
             self.calibrate()
 
         logger.info("Listening (threshold=%.4f) …", self._threshold)
+
+        # Clear any stale audio from previous session
+        while not self._audio_q.empty():
+            try:
+                self._audio_q.get_nowait()
+            except queue.Empty:
+                break
 
         pre_buffer: deque = deque(maxlen=_PRE_BUFFER_CHUNKS)
         recorded_frames: list[np.ndarray] = []
@@ -130,13 +139,33 @@ class VoiceInput:
         consecutive_loud = 0
         speech_rms_sum = 0.0
         speech_rms_count = 0
+        listen_start = time.monotonic()
 
         try:
             with sd.InputStream(
-                samplerate=self.samplerate, channels=self.channels, dtype="float32",
-            ) as stream:
+                samplerate=self.samplerate,
+                channels=self.channels,
+                dtype="float32",
+                blocksize=self._chunk_size,
+                callback=self._audio_callback,
+            ):
                 while not self._shutdown.is_set():
-                    chunk, _ = stream.read(self._chunk_size)
+                    # Non-blocking: wait at most 200ms for audio
+                    try:
+                        chunk = self._audio_q.get(timeout=_QUEUE_TIMEOUT)
+                    except queue.Empty:
+                        # No audio arrived — check timeouts anyway
+                        if is_recording and recording_start:
+                            elapsed = time.monotonic() - recording_start
+                            if elapsed > self.max_duration:
+                                logger.warning("Max duration (%ss) — no audio", self.max_duration)
+                                break
+                        # Don't hang forever waiting for speech either
+                        if not is_recording and time.monotonic() - listen_start > 120:
+                            logger.warning("No speech for 120s — recalibrating")
+                            return None
+                        continue
+
                     rms = float(np.sqrt(np.mean(chunk ** 2)))
 
                     if rms > self._threshold:
@@ -153,10 +182,8 @@ class VoiceInput:
                                 pre_buffer.clear()
                         else:
                             recorded_frames.append(chunk.copy())
-                            # Track speech volume for adaptive silence
                             speech_rms_sum += rms
                             speech_rms_count += 1
-
                     else:
                         consecutive_loud = 0
                         if not is_recording:
@@ -164,13 +191,11 @@ class VoiceInput:
                         else:
                             recorded_frames.append(chunk.copy())
 
-                            # Adaptive silence check:
-                            # Consider it "silence" if RMS dropped significantly
-                            # from the average speech volume
                             speech_avg = (speech_rms_sum / speech_rms_count
                                           if speech_rms_count > 0 else self._threshold)
                             silence_threshold = speech_avg * _SILENCE_FACTOR
-                            is_quiet = rms < max(silence_threshold, self._threshold * 0.8)
+                            is_quiet = rms < max(silence_threshold,
+                                                 self._threshold * 0.8)
 
                             if is_quiet:
                                 if silence_start is None:
@@ -181,7 +206,7 @@ class VoiceInput:
                             else:
                                 silence_start = None
 
-                    # Safety cap
+                    # Safety cap (ALWAYS fires, even if queue was full)
                     if (is_recording and recording_start
                             and time.monotonic() - recording_start > self.max_duration):
                         logger.warning("Max duration (%ss) reached", self.max_duration)

@@ -1,12 +1,13 @@
 """
-PMC Overwatch GUI — single avatar with animated voice-reactive effects.
+PMC Overwatch GUI — single avatar with immersive animated effects.
 
-Design philosophy (VTuber-inspired):
-  • ONE consistent avatar image — never swapped, always the same face
-  • Voice activity shown via animated sound bars below avatar
-  • State indicated by glow ring colour + pulsing intensity
-  • Gentle breathing bob for liveliness
-  • NO frame swapping (eliminates the jarring art-style inconsistency)
+Design:
+  • ONE consistent photorealistic avatar image
+  • Floating particles orbit the avatar for liveliness
+  • Gentle breathing bob + micro-sway for organic feel
+  • 11 voice-reactive bars with smooth interpolation  
+  • Multi-ring glow that pulses with state intensity
+  • State-driven colour scheme for all effects
 """
 
 import logging
@@ -48,25 +49,39 @@ _BORDER = "#30363d"
 
 # Avatar sizing
 _AV_SIZE = 200
-_CANVAS_W = 280
-_CANVAS_H = 280
-_FPS = 18
+_CANVAS_W = 300
+_CANVAS_H = 310
+_FPS = 20
 
 # Voice bars
-_N_BARS = 11
-_BAR_W = 5
+_N_BARS = 13
+_BAR_W = 4
 _BAR_GAP = 3
-_BAR_MAX_H = 22
+_BAR_MAX_H = 24
 
 # Glow per state
 _GLOW = {"idle": _MUTED, "listening": _GREEN, "thinking": _AMBER, "speaking": _CYAN}
+
+# Particles
+_N_PARTICLES = 16
+
+
+class _Particle:
+    __slots__ = ("angle", "radius", "speed", "size", "alpha")
+
+    def __init__(self):
+        self.angle = random.uniform(0, 2 * math.pi)
+        self.radius = random.uniform(110, 150)
+        self.speed = random.uniform(0.003, 0.012)
+        self.size = random.uniform(1.5, 3.5)
+        self.alpha = random.uniform(0.3, 0.8)
 
 
 class OverwatchGUI(ctk.CTk):
     def __init__(self) -> None:
         super().__init__()
         self.title("PMC Overwatch — Tarkov AI")
-        self.geometry("780x740")
+        self.geometry("780x760")
         self.minsize(580, 560)
         ctk.set_appearance_mode("dark")
         self.configure(fg_color=_BG)
@@ -84,11 +99,14 @@ class OverwatchGUI(ctk.CTk):
         self._pulse_vis = True
         self._dot_color = _MUTED
 
-        # Voice bar levels (smooth interpolation)
+        # Voice bar levels
         self._bar_target = [0.0] * _N_BARS
         self._bar_current = [0.0] * _N_BARS
 
-        # Load single avatar
+        # Particles
+        self._particles = [_Particle() for _ in range(_N_PARTICLES)]
+
+        # Load avatar
         self._av_photo: Optional[ImageTk.PhotoImage] = None
         self._load_avatar()
 
@@ -146,59 +164,76 @@ class OverwatchGUI(ctk.CTk):
         self._btn.pack(side="right")
 
     # ══════════════════════════════════════════════════════════════════
-    #  AVATAR — single image + animated effects
+    #  AVATAR — effects-driven animation
     # ══════════════════════════════════════════════════════════════════
     def _build_avatar(self) -> None:
         self._cv = tk.Canvas(self, width=_CANVAS_W, height=_CANVAS_H,
                              bg=_BG, highlightthickness=0, bd=0)
-        self._cv.pack(pady=(12, 0))
+        self._cv.pack(pady=(10, 0))
 
         self._av_status = ctk.CTkLabel(
             self, text="Offline",
             font=ctk.CTkFont(size=14, weight="bold"), text_color=_MUTED)
-        self._av_status.pack(pady=(2, 6))
+        self._av_status.pack(pady=(2, 4))
 
     def _render(self) -> None:
         cv = self._cv
         cv.delete("all")
         cx = _CANVAS_W // 2
-        bob = math.sin(self._phase * 0.4) * 2.0
-        cy = _CANVAS_H // 2 - 16 + bob
+        # Breathing bob + micro-sway
+        bob = math.sin(self._phase * 0.35) * 2.5
+        sway = math.sin(self._phase * 0.18) * 1.5
+        cy = _CANVAS_H // 2 - 20 + bob
         r = _AV_SIZE // 2
         glow_c = _GLOW.get(self._mode, _MUTED)
 
-        # ── Double glow ring ──────────────────────────────────────────
+        # ── Particles (orbit the avatar) ──────────────────────────────
+        for p in self._particles:
+            p.angle += p.speed
+            px = cx + sway + math.cos(p.angle) * p.radius
+            py = cy + math.sin(p.angle) * p.radius * 0.85
+            sz = p.size
+            if self._mode == "speaking":
+                sz *= 1.0 + (math.sin(self._phase * 2 + p.angle) + 1) * 0.4
+            cv.create_oval(px - sz, py - sz, px + sz, py + sz,
+                           fill=glow_c, outline="")
+
+        # ── Glow rings ────────────────────────────────────────────────
         pulse = (math.sin(self._phase * 1.2) + 1) * 0.5
-        # Outer ring
-        outer_r = r + 14 + pulse * 3
-        cv.create_oval(cx - outer_r, cy - outer_r, cx + outer_r, cy + outer_r,
+        # Outer halo
+        outer_r = r + 16 + pulse * 4
+        cv.create_oval(cx + sway - outer_r, cy - outer_r,
+                       cx + sway + outer_r, cy + outer_r,
                        outline=glow_c, width=1)
-        # Inner ring
-        inner_r = r + 8 + pulse * 2
+        # Middle ring
+        mid_r = r + 10 + pulse * 2
         ring_w = 3 if self._mode != "idle" else 2
-        cv.create_oval(cx - inner_r, cy - inner_r, cx + inner_r, cy + inner_r,
+        cv.create_oval(cx + sway - mid_r, cy - mid_r,
+                       cx + sway + mid_r, cy + mid_r,
                        outline=glow_c, width=ring_w)
 
         # ── Avatar image ──────────────────────────────────────────────
         if self._av_photo is not None:
-            cv.create_image(cx, cy, image=self._av_photo, anchor="center")
+            cv.create_image(cx + sway, cy, image=self._av_photo, anchor="center")
         else:
             cv.create_oval(cx - r, cy - r, cx + r, cy + r,
                            fill=_SURFACE, outline=_BORDER, width=2)
             cv.create_text(cx, cy, text="🎮", font=("", 48))
 
-        # ── Voice activity bars (below avatar) ─────────────────────────
+        # ── Voice bars (below avatar) ─────────────────────────────────
         total_w = _N_BARS * _BAR_W + (_N_BARS - 1) * _BAR_GAP
         bx_start = cx - total_w // 2
-        by_base = cy + r + 24
+        by_base = cy + r + 28
 
         for i in range(_N_BARS):
             h = max(2, int(self._bar_current[i] * _BAR_MAX_H))
             x = bx_start + i * (_BAR_W + _BAR_GAP)
+            # Main bar
             cv.create_rectangle(x, by_base - h, x + _BAR_W, by_base,
                                 fill=glow_c, outline="")
-            # Mirror below for reflection effect
-            cv.create_rectangle(x, by_base + 2, x + _BAR_W, by_base + 2 + max(1, h // 3),
+            # Reflection
+            ref_h = max(1, h // 4)
+            cv.create_rectangle(x, by_base + 2, x + _BAR_W, by_base + 2 + ref_h,
                                 fill=_BORDER, outline="")
 
     # ── Animation loop ────────────────────────────────────────────────
@@ -210,17 +245,18 @@ class OverwatchGUI(ctk.CTk):
             return
         self._phase += 0.12
 
-        # Update bar targets based on mode
+        # Update bar targets
         if self._mode == "speaking":
             for i in range(_N_BARS):
-                center_w = 1.0 - abs(i - _N_BARS // 2) / (_N_BARS // 2) * 0.4
-                self._bar_target[i] = max(0.1, random.uniform(0.2, 1.0) * center_w)
+                center_w = 1.0 - abs(i - _N_BARS // 2) / (_N_BARS // 2) * 0.3
+                self._bar_target[i] = max(0.15, random.uniform(0.25, 1.0) * center_w)
         elif self._mode == "thinking":
             for i in range(_N_BARS):
-                self._bar_target[i] = (math.sin(self._phase * 2 + i * 0.6) + 1) * 0.15
+                wave = (math.sin(self._phase * 2.0 + i * 0.5) + 1) * 0.5
+                self._bar_target[i] = wave * 0.25
         elif self._mode == "listening":
             for i in range(_N_BARS):
-                self._bar_target[i] = 0.05 + (math.sin(self._phase * 0.5 + i * 0.4) + 1) * 0.04
+                self._bar_target[i] = 0.05 + (math.sin(self._phase * 0.6 + i * 0.3) + 1) * 0.03
         else:
             for i in range(_N_BARS):
                 self._bar_target[i] = 0.0
@@ -228,7 +264,7 @@ class OverwatchGUI(ctk.CTk):
         # Smooth interpolation
         for i in range(_N_BARS):
             diff = self._bar_target[i] - self._bar_current[i]
-            self._bar_current[i] += diff * 0.4
+            self._bar_current[i] += diff * 0.35
 
         self._render()
         self._anim_id = self.after(1000 // _FPS, self._tick)
@@ -267,7 +303,7 @@ class OverwatchGUI(ctk.CTk):
         self._status_lbl = ctk.CTkLabel(inner, text="Offline",
                                         font=ctk.CTkFont(size=12), text_color=_TEXT2)
         self._status_lbl.pack(side="left")
-        ctk.CTkLabel(inner, text="v4.1", font=ctk.CTkFont(size=11),
+        ctk.CTkLabel(inner, text="v5.0", font=ctk.CTkFont(size=11),
                      text_color=_MUTED).pack(side="right")
 
     # ══════════════════════════════════════════════════════════════════

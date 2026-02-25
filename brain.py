@@ -19,27 +19,30 @@ from typing import Generator, Optional
 
 import ollama
 
+from tarkov_data import QUEST_REFERENCE
+
 logger = logging.getLogger(__name__)
 
 # ── Constants ────────────────────────────────────────────────────────
-_DEFAULT_MODEL = "qwen2.5:1.5b"
-_DEFAULT_NUM_CTX = 1024         # Minimal context = fastest generation
-_DEFAULT_NUM_PREDICT = 60       # ~1-2 sentences — snappy answers
-_DEFAULT_TEMPERATURE = 0.6
+_DEFAULT_MODEL = "qwen2.5:3b"
+_DEFAULT_NUM_CTX = 2048         # Room for quest reference + conversation
+_DEFAULT_NUM_PREDICT = 80       # Enough for detailed quest answers
+_DEFAULT_TEMPERATURE = 0.5
 _DEFAULT_TOP_P = 0.85
 _DEFAULT_REPEAT_PENALTY = 1.15
-_MAX_MEMORY = 4   # keep last N user/assistant pairs
+_MAX_MEMORY = 4
 _MAX_RETRIES = 3
 _RETRY_BASE_DELAY = 1.0
 
 _SYSTEM_INSTRUCTION = (
     "You are a female Tarkov veteran and gaming buddy. "
-    "You know every map, extract, weapon, ammo type, and boss spawn. "
     "Talk naturally like a friend on Discord. Use contractions. "
-    "Keep answers to 1-2 sentences unless asked for detail. "
+    "Keep answers to 1-3 sentences unless asked for detail. "
     "Be helpful, funny, sometimes sarcastic. "
-    "Never use markdown, lists, emoji, or military jargon like 'copy that'. "
-    "Never say you are an AI."
+    "Never use markdown, lists, emoji, or military jargon. "
+    "Never say you are an AI.\n\n"
+    "USE THIS REFERENCE for accurate Tarkov info:\n"
+    + QUEST_REFERENCE
 )
 
 # Regex to split accumulated text into complete sentences

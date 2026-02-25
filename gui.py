@@ -1,17 +1,12 @@
 """
-PMC Overwatch GUI — premium animated AI avatar with 6 expression frames.
+PMC Overwatch GUI — single avatar with animated voice-reactive effects.
 
-Frame-swapping animation for realistic avatar behaviour:
-  • idle:           neutral expression (avatar.png)
-  • listening:      curious head tilt  (avatar_listening.png)
-  • thinking:       contemplative look (avatar_thinking.png)
-  • speaking:       mouth slightly open (avatar_speaking.png)
-  • speaking_wide:  mouth wide open    (avatar_speaking_wide.png)
-  • blinking:       eyes closed        (avatar_blinking.png)
-
-Blinking triggers randomly (2-5s intervals) across ALL states.
-Speaking alternates between 3 mouth frames for natural movement.
-Glow ring + breathing bob for liveliness.
+Design philosophy (VTuber-inspired):
+  • ONE consistent avatar image — never swapped, always the same face
+  • Voice activity shown via animated sound bars below avatar
+  • State indicated by glow ring colour + pulsing intensity
+  • Gentle breathing bob for liveliness
+  • NO frame swapping (eliminates the jarring art-style inconsistency)
 """
 
 import logging
@@ -34,15 +29,7 @@ except ImportError:
     _HAS_PIL = False
 
 # ── Paths ────────────────────────────────────────────────────────────
-_ASSETS = Path(__file__).parent / "assets"
-_ALL_FRAMES = {
-    "idle": _ASSETS / "avatar.png",
-    "listening": _ASSETS / "avatar_listening.png",
-    "thinking": _ASSETS / "avatar_thinking.png",
-    "speaking": _ASSETS / "avatar_speaking.png",
-    "speaking_wide": _ASSETS / "avatar_speaking_wide.png",
-    "blinking": _ASSETS / "avatar_blinking.png",
-}
+_AVATAR_PATH = Path(__file__).parent / "assets" / "avatar.png"
 
 # ── Palette ──────────────────────────────────────────────────────────
 _BG = "#0d1117"
@@ -59,58 +46,52 @@ _TEXT2 = "#8b949e"
 _MUTED = "#484f58"
 _BORDER = "#30363d"
 
-# Avatar
-_AV_SIZE = 220
-_CANVAS_SIZE = _AV_SIZE + 36
-_FPS = 15
+# Avatar sizing
+_AV_SIZE = 200
+_CANVAS_W = 280
+_CANVAS_H = 280
+_FPS = 18
 
-# Ring glow per state
-_GLOW = {
-    "idle": _MUTED,
-    "listening": _GREEN,
-    "thinking": _AMBER,
-    "speaking": _CYAN,
-}
+# Voice bars
+_N_BARS = 11
+_BAR_W = 5
+_BAR_GAP = 3
+_BAR_MAX_H = 22
+
+# Glow per state
+_GLOW = {"idle": _MUTED, "listening": _GREEN, "thinking": _AMBER, "speaking": _CYAN}
 
 
 class OverwatchGUI(ctk.CTk):
     def __init__(self) -> None:
         super().__init__()
         self.title("PMC Overwatch — Tarkov AI")
-        self.geometry("780x720")
-        self.minsize(580, 540)
+        self.geometry("780x740")
+        self.minsize(580, 560)
         ctk.set_appearance_mode("dark")
         self.configure(fg_color=_BG)
 
-        # State
         self._toggle_cb: Optional[Callable[[bool], None]] = None
         self._is_running = False
         self.shutdown_event = threading.Event()
         self._threads: list[threading.Thread] = []
 
-        # Animation state
+        # Animation
         self._mode = "idle"
         self._phase = 0.0
         self._anim_id: Optional[str] = None
         self._pulse_id: Optional[str] = None
         self._pulse_vis = True
         self._dot_color = _MUTED
-        self._frame_counter = 0
 
-        # Blink state
-        self._blink_active = False
-        self._blink_remaining = 0
-        self._next_blink = random.randint(30, 75)
+        # Voice bar levels (smooth interpolation)
+        self._bar_target = [0.0] * _N_BARS
+        self._bar_current = [0.0] * _N_BARS
 
-        # Mouth animation
-        self._mouth_state = 0  # 0=closed, 1=open, 2=wide
-        self._mouth_timer = 0
+        # Load single avatar
+        self._av_photo: Optional[ImageTk.PhotoImage] = None
+        self._load_avatar()
 
-        # Load avatar frames
-        self._frames: dict[str, Optional[ImageTk.PhotoImage]] = {}
-        self._load_all_frames()
-
-        # Build UI
         self._build_header()
         self._build_avatar()
         self._build_log()
@@ -118,30 +99,22 @@ class OverwatchGUI(ctk.CTk):
         self._start_anim()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
-    # ── Load all 6 expression frames ──────────────────────────────────
-    def _load_all_frames(self) -> None:
-        if not _HAS_PIL:
+    def _load_avatar(self) -> None:
+        if not _HAS_PIL or not _AVATAR_PATH.exists():
             return
-        for name, path in _ALL_FRAMES.items():
-            if not path.exists():
-                logger.info("Frame not found: %s", path.name)
-                continue
-            try:
-                img = Image.open(path).convert("RGBA")
-                img = img.resize((_AV_SIZE, _AV_SIZE), Image.LANCZOS)
-                # Soft circular mask
-                mask = Image.new("L", (_AV_SIZE, _AV_SIZE), 0)
-                d = ImageDraw.Draw(mask)
-                d.ellipse((0, 0, _AV_SIZE - 1, _AV_SIZE - 1), fill=255)
-                mask = mask.filter(ImageFilter.GaussianBlur(1))
-                img.putalpha(mask)
-                # Composite on app bg
-                bg = Image.new("RGBA", (_AV_SIZE, _AV_SIZE), (13, 17, 23, 255))
-                bg.paste(img, (0, 0), img)
-                self._frames[name] = ImageTk.PhotoImage(bg.convert("RGB"))
-            except Exception:
-                logger.exception("Frame load error: %s", name)
-        logger.info("Loaded %d avatar frames: %s", len(self._frames), list(self._frames))
+        try:
+            img = Image.open(_AVATAR_PATH).convert("RGBA")
+            img = img.resize((_AV_SIZE, _AV_SIZE), Image.LANCZOS)
+            mask = Image.new("L", (_AV_SIZE, _AV_SIZE), 0)
+            d = ImageDraw.Draw(mask)
+            d.ellipse((0, 0, _AV_SIZE - 1, _AV_SIZE - 1), fill=255)
+            mask = mask.filter(ImageFilter.GaussianBlur(1))
+            img.putalpha(mask)
+            bg = Image.new("RGBA", (_AV_SIZE, _AV_SIZE), (13, 17, 23, 255))
+            bg.paste(img, (0, 0), img)
+            self._av_photo = ImageTk.PhotoImage(bg.convert("RGB"))
+        except Exception:
+            logger.exception("Avatar load failed")
 
     # ══════════════════════════════════════════════════════════════════
     #  HEADER
@@ -166,108 +139,96 @@ class OverwatchGUI(ctk.CTk):
                      font=ctk.CTkFont(size=11), text_color=_TEXT2).pack(anchor="w")
 
         self._btn = ctk.CTkButton(
-            inner, text="▶  Start", width=150, height=44,
+            inner, text="▶  Start", width=140, height=44,
             corner_radius=12, font=ctk.CTkFont(size=14, weight="bold"),
             fg_color=_GREEN, hover_color=_GREEN_H, text_color="white",
             command=self._on_toggle)
         self._btn.pack(side="right")
 
     # ══════════════════════════════════════════════════════════════════
-    #  AVATAR — 6-frame animation
+    #  AVATAR — single image + animated effects
     # ══════════════════════════════════════════════════════════════════
     def _build_avatar(self) -> None:
-        self._cv = tk.Canvas(self, width=_CANVAS_SIZE, height=_CANVAS_SIZE,
+        self._cv = tk.Canvas(self, width=_CANVAS_W, height=_CANVAS_H,
                              bg=_BG, highlightthickness=0, bd=0)
         self._cv.pack(pady=(12, 0))
 
         self._av_status = ctk.CTkLabel(
             self, text="Offline",
             font=ctk.CTkFont(size=14, weight="bold"), text_color=_MUTED)
-        self._av_status.pack(pady=(4, 6))
-
-    def _pick_frame(self) -> Optional[ImageTk.PhotoImage]:
-        """Pick the right expression frame based on state + blink + mouth."""
-        # Blink overrides everything (brief)
-        if self._blink_active and "blinking" in self._frames:
-            return self._frames["blinking"]
-
-        if self._mode == "speaking":
-            if self._mouth_state == 2 and "speaking_wide" in self._frames:
-                return self._frames["speaking_wide"]
-            elif self._mouth_state == 1 and "speaking" in self._frames:
-                return self._frames["speaking"]
-            return self._frames.get("idle")
-
-        if self._mode == "thinking":
-            return self._frames.get("thinking") or self._frames.get("idle")
-
-        if self._mode == "listening":
-            return self._frames.get("listening") or self._frames.get("idle")
-
-        return self._frames.get("idle")
+        self._av_status.pack(pady=(2, 6))
 
     def _render(self) -> None:
         cv = self._cv
         cv.delete("all")
-        cx = _CANVAS_SIZE // 2
-        bob = math.sin(self._phase * 0.4) * 2.5
-        cy = _CANVAS_SIZE // 2 + bob
+        cx = _CANVAS_W // 2
+        bob = math.sin(self._phase * 0.4) * 2.0
+        cy = _CANVAS_H // 2 - 16 + bob
         r = _AV_SIZE // 2
-
-        # Glow ring
         glow_c = _GLOW.get(self._mode, _MUTED)
+
+        # ── Double glow ring ──────────────────────────────────────────
         pulse = (math.sin(self._phase * 1.2) + 1) * 0.5
-        glow_r = r + 12 + pulse * 4 if self._mode == "speaking" else r + 10
-        ring_w = 3 + int(pulse * 2) if self._mode != "idle" else 2
-        cv.create_oval(cx - glow_r, cy - glow_r, cx + glow_r, cy + glow_r,
+        # Outer ring
+        outer_r = r + 14 + pulse * 3
+        cv.create_oval(cx - outer_r, cy - outer_r, cx + outer_r, cy + outer_r,
+                       outline=glow_c, width=1)
+        # Inner ring
+        inner_r = r + 8 + pulse * 2
+        ring_w = 3 if self._mode != "idle" else 2
+        cv.create_oval(cx - inner_r, cy - inner_r, cx + inner_r, cy + inner_r,
                        outline=glow_c, width=ring_w)
 
-        # Second subtle outer ring for premium feel
-        if self._mode != "idle":
-            outer_r = glow_r + 6
-            cv.create_oval(cx - outer_r, cy - outer_r, cx + outer_r, cy + outer_r,
-                           outline=glow_c, width=1)
-
-        # Avatar frame
-        frame = self._pick_frame()
-        if frame is not None:
-            cv.create_image(cx, cy, image=frame, anchor="center")
+        # ── Avatar image ──────────────────────────────────────────────
+        if self._av_photo is not None:
+            cv.create_image(cx, cy, image=self._av_photo, anchor="center")
         else:
             cv.create_oval(cx - r, cy - r, cx + r, cy + r,
                            fill=_SURFACE, outline=_BORDER, width=2)
             cv.create_text(cx, cy, text="🎮", font=("", 48))
 
-    # ── Animation loop (15fps) ────────────────────────────────────────
+        # ── Voice activity bars (below avatar) ─────────────────────────
+        total_w = _N_BARS * _BAR_W + (_N_BARS - 1) * _BAR_GAP
+        bx_start = cx - total_w // 2
+        by_base = cy + r + 24
+
+        for i in range(_N_BARS):
+            h = max(2, int(self._bar_current[i] * _BAR_MAX_H))
+            x = bx_start + i * (_BAR_W + _BAR_GAP)
+            cv.create_rectangle(x, by_base - h, x + _BAR_W, by_base,
+                                fill=glow_c, outline="")
+            # Mirror below for reflection effect
+            cv.create_rectangle(x, by_base + 2, x + _BAR_W, by_base + 2 + max(1, h // 3),
+                                fill=_BORDER, outline="")
+
+    # ── Animation loop ────────────────────────────────────────────────
     def _start_anim(self) -> None:
         self._tick()
 
     def _tick(self) -> None:
         if self.shutdown_event.is_set():
             return
-        self._phase += 0.1
-        self._frame_counter += 1
+        self._phase += 0.12
 
-        # ── Blink (across ALL states) ─────────────────────────────────
-        if self._blink_active:
-            self._blink_remaining -= 1
-            if self._blink_remaining <= 0:
-                self._blink_active = False
-                self._next_blink = self._frame_counter + random.randint(30, 75)
-        elif self._frame_counter >= self._next_blink:
-            self._blink_active = True
-            self._blink_remaining = 3  # ~200ms
-
-        # ── Mouth cycle (speaking only) ───────────────────────────────
+        # Update bar targets based on mode
         if self._mode == "speaking":
-            self._mouth_timer += 1
-            cycle_len = random.randint(2, 4)
-            if self._mouth_timer >= cycle_len:
-                # Cycle: closed(0) → open(1) → wide(2) → open(1) → closed(0)
-                self._mouth_state = random.choice([0, 1, 1, 2])
-                self._mouth_timer = 0
+            for i in range(_N_BARS):
+                center_w = 1.0 - abs(i - _N_BARS // 2) / (_N_BARS // 2) * 0.4
+                self._bar_target[i] = max(0.1, random.uniform(0.2, 1.0) * center_w)
+        elif self._mode == "thinking":
+            for i in range(_N_BARS):
+                self._bar_target[i] = (math.sin(self._phase * 2 + i * 0.6) + 1) * 0.15
+        elif self._mode == "listening":
+            for i in range(_N_BARS):
+                self._bar_target[i] = 0.05 + (math.sin(self._phase * 0.5 + i * 0.4) + 1) * 0.04
         else:
-            self._mouth_state = 0
-            self._mouth_timer = 0
+            for i in range(_N_BARS):
+                self._bar_target[i] = 0.0
+
+        # Smooth interpolation
+        for i in range(_N_BARS):
+            diff = self._bar_target[i] - self._bar_current[i]
+            self._bar_current[i] += diff * 0.4
 
         self._render()
         self._anim_id = self.after(1000 // _FPS, self._tick)
@@ -306,7 +267,7 @@ class OverwatchGUI(ctk.CTk):
         self._status_lbl = ctk.CTkLabel(inner, text="Offline",
                                         font=ctk.CTkFont(size=12), text_color=_TEXT2)
         self._status_lbl.pack(side="left")
-        ctk.CTkLabel(inner, text="v4.0", font=ctk.CTkFont(size=11),
+        ctk.CTkLabel(inner, text="v4.1", font=ctk.CTkFont(size=11),
                      text_color=_MUTED).pack(side="right")
 
     # ══════════════════════════════════════════════════════════════════

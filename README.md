@@ -1,112 +1,86 @@
 # PMC Overwatch — Tarkov AI Companion
 
-> **⚠️ Work in Progress** — Under active development.
-
-A real-time AI voice companion for Escape from Tarkov. Speak naturally and get instant, knowledgeable voice responses powered by a local LLM and neural TTS. Runs **entirely offline** on macOS — no paid APIs, no cloud services.
+> Real-time AI voice companion for Escape from Tarkov. Speak naturally, get instant voice responses with accurate quest knowledge. **Runs entirely offline on macOS.**
 
 ## ✨ Features
 
 | Feature | Description |
 |---------|-------------|
-| **🎙 Voice Chat** | Natural speech-to-text → AI → text-to-speech pipeline |
-| **🧠 Local AI Brain** | Ollama LLM with conversation memory and Tarkov expertise |
-| **🎤 Offline STT** | faster-whisper speech recognition (fully local) |
-| **🔊 Neural TTS** | Kokoro ONNX neural voice — warm, natural, female |
-| **👩 Animated Avatar** | Frame-swapping expressions: idle, speaking, blinking |
-| **📺 Twitch Bot** | Optional Twitch chat integration for streaming |
+| **🎙 Voice Chat** | Speech → AI → Voice pipeline with natural conversation |
+| **🧠 Tarkov Expert** | Accurate quest info, map extracts, ammo tiers, boss locations |
+| **🎤 Offline STT** | faster-whisper speech recognition (local) |
+| **🔊 Neural TTS** | Kokoro ONNX — warm, natural female voice |
+| **👩 Animated Avatar** | VTuber-style with voice-reactive bars + glow effects |
+| **📺 Twitch Bot** | Optional Twitch chat integration |
 
 ## 🛠 Tech Stack
 
 | Layer | Technology |
 |-------|-----------|
-| LLM | [Ollama](https://ollama.ai) — `qwen2.5:1.5b` for fast responses |
-| TTS | [Kokoro ONNX](https://github.com/thewh1teagle/kokoro-onnx) — neural voice synthesis |
-| STT | [faster-whisper](https://github.com/SYSTRAN/faster-whisper) — CTranslate2 Whisper |
-| GUI | [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter) + PIL — dark UI |
-| Streaming | [TwitchIO](https://github.com/TwitchIO/TwitchIO) — chat integration |
+| LLM | [Ollama](https://ollama.ai) — `qwen2.5:3b` with Tarkov knowledge base |
+| TTS | [Kokoro ONNX](https://github.com/thewh1teagle/kokoro-onnx) — neural voice |
+| STT | [faster-whisper](https://github.com/SYSTRAN/faster-whisper) — CTranslate2 |
+| GUI | [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter) + Canvas |
 
-## 📋 Requirements
-
-- macOS (Apple Silicon recommended)
-- Python 3.11+
-- [Ollama](https://ollama.ai) installed and running
-- ~4 GB RAM minimum
-
-## 🚀 Quick Start
+##  Quick Start
 
 ```bash
-# Clone
 git clone https://github.com/Bossiq/Tarkov_AI_Frriend.git
 cd Tarkov_AI_Frriend
-
-# Setup
-python3 -m venv venv
-source venv/bin/activate
+python3 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
-
-# Configure
 cp .env.example .env
-
-# Pull AI model (fast 1.5B model, ~1GB)
-ollama pull qwen2.5:1.5b
-
-# Run
+ollama pull qwen2.5:3b
 python main.py
 ```
 
 ## ⚙️ Configuration
 
-All settings live in `.env` — see [.env.example](.env.example) for full docs.
-
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `OLLAMA_MODEL` | `qwen2.5:1.5b` | LLM model (fast, 1GB) |
-| `OLLAMA_NUM_CTX` | `1024` | Context window |
+| `OLLAMA_MODEL` | `qwen2.5:3b` | LLM model (2GB, fast + accurate) |
+| `OLLAMA_NUM_CTX` | `2048` | Context window |
 | `TTS_VOICE` | `af_heart` | Kokoro voice ID |
-| `TTS_SPEED` | `1.1` | Speech speed |
-| `WHISPER_MODEL` | `base` | STT model size |
+| `TTS_SPEED` | `1.2` | Speech speed |
 
 ## 📁 Project Structure
 
 ```
-├── main.py             # Entry point — orchestrates all components
-├── brain.py            # AI brain (Ollama + memory + personality)
+├── main.py             # Entry point — orchestrates everything
+├── brain.py            # AI brain (Ollama + Tarkov knowledge + memory)
+├── tarkov_data.py      # Quest reference data (injected into LLM context)
 ├── voice_input.py      # Mic capture + adaptive VAD + Whisper STT
 ├── voice_output.py     # Kokoro TTS + async sentence pipeline
-├── gui.py              # Animated avatar with frame-swapping
+├── gui.py              # Animated avatar with voice-reactive effects
 ├── twitch_bot.py       # Optional Twitch chat integration
 ├── video_capture.py    # Optional webcam capture
 ├── logging_config.py   # Centralized logging
-├── assets/
-│   ├── avatar.png            # Idle expression
-│   ├── avatar_speaking.png   # Speaking (mouth open)
-│   └── avatar_blinking.png   # Blinking (eyes closed)
+├── assets/avatar.png   # AI companion avatar
 ├── .env.example        # Environment template
-├── requirements.txt    # Python dependencies
-├── LICENSE             # MIT License
-└── README.md
+└── requirements.txt    # Dependencies
 ```
 
 ## 🏗 Architecture
 
 ```mermaid
 graph LR
-    A[🎤 Microphone] -->|Audio| B[faster-whisper STT]
-    B -->|Text| C[Ollama LLM]
-    C -->|Streamed text| D[Kokoro TTS]
+    A[🎤 Mic] -->|Audio| B[faster-whisper]
+    B -->|Text| C[Ollama + Tarkov KB]
+    C -->|Streamed| D[Kokoro TTS]
     D -->|Audio| E[🔊 Speaker]
-    C -.->|State updates| F[Animated Avatar GUI]
-    F -.->|Chat| G[Twitch Bot]
+    C -.->|State| F[Avatar GUI]
 ```
 
-### Why Python?
+### Design Decisions
 
-The bottleneck is the **LLM inference** (Ollama, native C++) and **TTS synthesis** (ONNX Runtime, native code). Python just orchestrates the pipeline — switching to Rust/C++ would not make these faster. The real speed lever is **model size** (1.5B vs 7B = 4x faster).
+- **Single Avatar + Effects**: One consistent image with animated voice bars and glow ring — no jarring frame swapping
+- **Tarkov Knowledge Base**: Quest data injected into LLM context so even small models answer correctly
+- **Adaptive Silence**: Mic detects silence relative to your speech volume, not absolute threshold
+- **Python**: Bottleneck is LLM inference (native C++) — Python just orchestrates
 
 ## 📄 License
 
 MIT — see [LICENSE](LICENSE).
 
 ---
-
-*Built by [Bossiq](https://github.com/Bossiq).*
+*Built by [Bossiq](https://github.com/Bossiq)*

@@ -9,5 +9,6 @@ sounddevice==0.5.5
 soundfile==0.13.1
 numpy==2.4.2
 ollama==0.6.1
+kokoro-onnx==0.5.0
 python-dotenv==1.2.1
 customtkinter==5.2.2

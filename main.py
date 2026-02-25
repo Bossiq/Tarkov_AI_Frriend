@@ -27,6 +27,8 @@ class SCAVESystem:
 
         # Hook up twitch chat callback
         self.twitch_bot.set_callback(self.on_twitch_message)
+        # Pass system reference for VAD async loop inside event_ready
+        self.twitch_bot.set_system_reference(self)
 
     async def on_twitch_message(self, author, content):
         """Handles a message from Twitch chat."""
@@ -44,10 +46,18 @@ class SCAVESystem:
         image_path = None
 
         if use_audio:
-            # Record 5 seconds of audio
-            audio_path = self.vi.record_audio(duration=5, output_filename="current_request.wav")
-            if not text_prompt:
-                text_prompt = "Transcribe and respond to this audio request."
+            try:
+                # Record via continuous voice activity detection
+                audio_path = self.vi.listen(output_filename="current_request.wav")
+                if not audio_path:
+                    # Return immediately to avoid empty GenAI spam
+                    return
+                if not text_prompt:
+                    text_prompt = "Transcribe and respond to this audio request."
+            except Exception as e:
+                print(f"Audio recording error: {e}")
+                time.sleep(2)
+                return
 
         if use_video:
             import cv2
@@ -84,20 +94,31 @@ class SCAVESystem:
         else:
             print("Could not start video capture.")
 
+    async def continuous_listening_loop(self):
+        import asyncio
+        print("[SCAV-E/PMC] Hands-free continuous listening active.")
+        while self.running:
+            try:
+                await asyncio.to_thread(self.process_interaction, None, True, False)
+            except Exception as e:
+                print(f"Listening loop crashed: {e}")
+                await asyncio.sleep(2)
+            await asyncio.sleep(0.1)
+
     def run(self):
         # Start the video background thread
         threading.Thread(target=self.start_video_loop, daemon=True).start()
         
-        print("SCAV-E is alive. Waiting for Twitch chat or press Ctrl+C to stop.")
+        print("PMC Overwatch is alive. Ready for voice interaction or Twitch chat. Press Ctrl+C to stop.")
         
         try:
             # Start the twitch bot (this blocks the main thread)
             self.twitch_bot.run()
         except KeyboardInterrupt:
-            print("\nShutting down SCAV-E...")
+            print("\nShutting down Overwatch...")
             self.running = False
             self.vc.stop()
-            print("Done. Goodbye, Blyat.")
+            print("Done. Goodbye.")
 
 if __name__ == "__main__":
     import asyncio

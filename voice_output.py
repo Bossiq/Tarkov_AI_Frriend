@@ -1,41 +1,42 @@
-import edge_tts
-import pygame
-import asyncio
 import os
+import time
+import subprocess
+import soundfile as sf
+import sounddevice as sd
 
 class VoiceOutput:
-    def __init__(self, voice="en-US-ChristopherNeural"):
-        self.voice = voice
-        pygame.mixer.init()
-
-    async def _generate_audio(self, text, output_file):
-        """Generates an MP3 file from text using edge-tts."""
-        communicate = edge_tts.Communicate(text, self.voice)
-        await communicate.save(output_file)
+    def __init__(self, model="piper/operator.onnx", executable="piper/piper.exe"):
+        self.model = model
+        self.executable = executable
 
     def speak(self, text):
-        """Generates and plays speech audio."""
-        print(f"SCAV-E Output: {text}")
-        output_file = "scav_output.mp3"
+        """Generates and plays speech audio via offline Piper TTS CLI."""
+        print(f"PMC Output: {text}")
+        
+        unique_filename = f'pmc_output_{int(time.time())}.wav'
         
         try:
-            # Generate the audio blockingly (since speak is called from a thread in main.py)
-            asyncio.run(self._generate_audio(text, output_file))
+            # Generate the audio blockingly using Piper TTS CLI
+            subprocess.run(
+                [self.executable, '--model', self.model, '--output_file', unique_filename],
+                input=text.encode('utf-8'),
+                check=True
+            )
             
-            # Play the audio using pygame
-            pygame.mixer.music.load(output_file)
-            pygame.mixer.music.play()
-            
-            # Wait for playback to finish
-            while pygame.mixer.music.get_busy():
-                pygame.time.Clock().tick(10)
-                
-            # Unload the file so it can be overwritten next time
-            pygame.mixer.music.unload()
+            # Play the audio using sounddevice blockingly
+            data, fs = sf.read(unique_filename)
+            sd.play(data, fs)
+            sd.wait()
             
         except Exception as e:
             print(f"TTS Error: {e}")
+        finally:
+            if os.path.exists(unique_filename):
+                try:
+                    os.remove(unique_filename)
+                except Exception as cleanup_error:
+                    pass
 
 if __name__ == "__main__":
     vo = VoiceOutput()
-    vo.speak("Blyat! Cheeky breeky iv damke!")
+    vo.speak("Affirmative. Holding position.")

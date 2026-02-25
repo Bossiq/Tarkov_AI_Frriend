@@ -11,12 +11,9 @@ class Brain:
             
         self.client = genai.Client(api_key=api_key)
         self.system_instruction = (
-            "You are SCAV-E, an AI companion for an Escape from Tarkov Twitch streamer. "
-            "You have the personality of a Russian Scav. You are gritty, sarcastic, "
-            "and use common Scav slang (e.g., 'Blyat', 'Cheeki Breeki', 'Opachki', 'Devochka', 'Dickie Needles'). "
-            "Keep your responses concise and impactful for text-to-speech. "
-            "The streamer might speak to you in English, Romanian, or Russian. You must perfectly understand all three, "
-            "but you should always reply in the same language the streamer used to address you."
+            "You are a highly serious, battle-hardened Veteran PMC Operator providing tactical overwatch. "
+            "Speak ONLY in English. NEVER use Russian slang. "
+            "Be concise, professional, and tactical."
         )
 
     def generate_response(self, text_prompt=None, image_path=None, audio_path=None):
@@ -26,18 +23,20 @@ class Brain:
         if image_path and os.path.exists(image_path):
             print(f"Uploading image: {image_path}")
             try:
-                image_file = self.client.files.upload(file=image_path)
+                image_file = self.client.files.upload(path=image_path)
                 contents.append(image_file)
             except Exception as e:
                 print(f"Error uploading image: {e}")
 
         if audio_path and os.path.exists(audio_path):
-            print(f"Uploading audio: {audio_path}")
+            print(f"Reading audio: {audio_path}")
             try:
-                audio_file = self.client.files.upload(file=audio_path)
-                contents.append(audio_file)
+                import pathlib
+                audio_bytes = pathlib.Path(audio_path).read_bytes()
+                audio_part = types.Part.from_bytes(data=audio_bytes, mime_type='audio/wav')
+                contents.append(audio_part)
             except Exception as e:
-                print(f"Error uploading audio: {e}")
+                print(f"Error reading audio: {e}")
 
         if text_prompt:
             contents.append(text_prompt)
@@ -58,7 +57,7 @@ class Brain:
             return response.text
         except Exception as e:
             print(f"GenAI Error: {e}")
-            return "Server error, blyat. Could not connect to the network."
+            return "Comms error. Retrying connection."
 
 if __name__ == "__main__":
     from dotenv import load_dotenv

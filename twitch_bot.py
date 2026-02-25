@@ -18,6 +18,11 @@ class TwitchBot(commands.Bot):
 
         super().__init__(token=token, prefix=prefix, initial_channels=channels)
         self.message_callback = None
+        self.system_reference = None
+
+    def set_system_reference(self, system):
+        """Stores a reference to the main SCAVESystem for async task spawning."""
+        self.system_reference = system
 
     def set_callback(self, callback):
         """Sets the callback function to handle incoming chat messages."""
@@ -26,6 +31,10 @@ class TwitchBot(commands.Bot):
     async def event_ready(self):
         print(f'Twitch Bot logged in as | {self.nick}')
         print(f'Connected channels: {self.connected_channels}')
+        
+        # Start the continuous listening loop now that the event loop is definitely running
+        if self.system_reference:
+            self.loop.create_task(self.system_reference.continuous_listening_loop())
 
     async def event_message(self, message):
         if message.echo:

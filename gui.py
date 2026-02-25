@@ -199,7 +199,6 @@ class OverwatchGUI(ctk.CTk):
                 logger.exception("Failed to load avatar image")
 
         self._draw_avatar_ring()
-        self._start_avatar_animation()
 
         # ── Info panel next to avatar ─────────────────────────────────
         info = ctk.CTkFrame(top, fg_color="transparent")
@@ -239,6 +238,7 @@ class OverwatchGUI(ctk.CTk):
 
         self._draw_visualizer()
         self._start_vis_animation()
+        self._start_avatar_animation()
 
     # ── Avatar ring drawing + animation ───────────────────────────────
     def _draw_avatar_ring(self) -> None:

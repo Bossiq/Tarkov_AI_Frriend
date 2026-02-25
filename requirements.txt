@@ -1,9 +1,9 @@
-opencv-python==4.9.0.80
+opencv-python
 twitchio==2.8.2
 SpeechRecognition==3.10.1
 sounddevice==0.4.6
 soundfile==0.12.1
-numpy==1.26.4
+numpy
 google-genai==0.3.0
 python-dotenv==1.0.1
 customtkinter

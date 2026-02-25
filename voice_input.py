@@ -25,13 +25,13 @@ logger = logging.getLogger(__name__)
 _SAMPLERATE = 16_000
 _CHANNELS = 1
 _CHUNK_SECONDS = 0.1
-_SILENCE_DURATION = 1.5           # 1.5s quiet = done talking
-_MAX_RECORDING_SECONDS = 30
+_SILENCE_DURATION = 1.2           # 1.2s quiet = done talking
+_MAX_RECORDING_SECONDS = 15       # Hard cap — prevents infinite recording
 _CALIBRATION_SECONDS = 1.0
-_NOISE_MULTIPLIER = 2.5
-_MIN_SPEECH_CHUNKS = 2            # 200ms to confirm speech start
-_PRE_BUFFER_CHUNKS = 8            # 800ms of pre-speech audio
-_SILENCE_FACTOR = 0.3             # Silence = RMS drops to 30% of speech avg
+_NOISE_MULTIPLIER = 3.0           # Higher = less sensitive to noise
+_MIN_SPEECH_CHUNKS = 2
+_PRE_BUFFER_CHUNKS = 6            # 600ms pre-speech
+_SILENCE_FACTOR = 0.4             # Silence = RMS drops to 40% of speech avg
 _DEFAULT_WHISPER_MODEL = "base"
 _DEFAULT_COMPUTE_TYPE = "int8"
 

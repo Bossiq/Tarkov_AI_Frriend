@@ -1,91 +1,107 @@
 # PMC Overwatch — Tarkov AI Companion
 
-> **⚠️ Work in Progress** — This project is under active development.
+> **⚠️ Work in Progress** — Under active development.
 
-A real-time AI voice companion for Escape from Tarkov that listens, talks, and helps you survive raids. Runs entirely **locally** on macOS — no paid APIs or cloud services required.
+A real-time AI voice companion for Escape from Tarkov. Speak naturally and get instant, knowledgeable voice responses powered by a local LLM and neural TTS. Runs **entirely offline** on macOS — no paid APIs, no cloud services.
 
-## Features
+## ✨ Features
 
-- **🎙 Voice Chat** — Speak naturally and get instant voice responses
-- **🧠 AI Brain** — Local LLM (Ollama) with conversation memory and Tarkov expertise  
-- **🎤 Speech Recognition** — Local transcription via faster-whisper (offline)
-- **🔊 Natural TTS** — High-quality voice via Kokoro neural TTS (female voice)
-- **🎨 Animated GUI** — Dark-mode desktop app with animated AI avatar and waveform visualizer
-- **📺 Twitch Integration** — Optional Twitch chat bot for stream interaction
+| Feature | Description |
+|---------|-------------|
+| **🎙 Voice Chat** | Natural speech-to-text → AI → text-to-speech pipeline |
+| **🧠 Local AI Brain** | Ollama LLM with conversation memory and Tarkov expertise |
+| **🎤 Offline STT** | faster-whisper speech recognition (fully local) |
+| **🔊 Neural TTS** | Kokoro ONNX female voice — warm, natural, low-latency |
+| **👩 Animated Avatar** | VTuber-style face with glow aura and voice EQ animation |
+| **📺 Twitch Bot** | Optional Twitch chat integration for streaming |
 
-## Tech Stack
+## 🛠 Tech Stack
 
-| Component | Technology |
-|-----------|-----------|
-| LLM | [Ollama](https://ollama.ai) (Mistral) — local inference |
-| TTS | [Kokoro ONNX](https://github.com/thewh1teagle/kokoro-onnx) — neural voice |
-| STT | [faster-whisper](https://github.com/SYSTRAN/faster-whisper) — local transcription |
+| Layer | Technology |
+|-------|-----------|
+| LLM | [Ollama](https://ollama.ai) — local Mistral inference |
+| TTS | [Kokoro ONNX](https://github.com/thewh1teagle/kokoro-onnx) — neural voice synthesis |
+| STT | [faster-whisper](https://github.com/SYSTRAN/faster-whisper) — CTranslate2 Whisper |
 | GUI | [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter) — modern dark UI |
-| Chat | [TwitchIO](https://github.com/TwitchIO/TwitchIO) — optional Twitch bot |
+| Streaming | [TwitchIO](https://github.com/TwitchIO/TwitchIO) — chat integration |
 
-## Requirements
+## 📋 Requirements
 
 - macOS (Apple Silicon recommended)
 - Python 3.11+
 - [Ollama](https://ollama.ai) installed and running
 - ~8 GB RAM minimum
 
-## Setup
+## 🚀 Quick Start
 
 ```bash
-# Clone the repo
+# Clone
 git clone https://github.com/Bossiq/Tarkov_AI_Frriend.git
 cd Tarkov_AI_Frriend
 
-# Create virtual environment
+# Setup
 python3 -m venv venv
 source venv/bin/activate
-
-# Install dependencies
 pip install -r requirements.txt
 
-# Copy and configure environment variables
+# Configure
 cp .env.example .env
+# Edit .env if needed
 
-# Pull the Ollama model
+# Pull AI model
 ollama pull mistral
 
 # Run
 python main.py
 ```
 
-## Configuration
+## ⚙️ Configuration
 
-All settings are in `.env` — see `.env.example` for documentation:
+All settings live in `.env` — see [.env.example](.env.example) for full docs.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `OLLAMA_MODEL` | `mistral` | LLM model name |
+| `OLLAMA_MODEL` | `mistral` | LLM model |
+| `OLLAMA_NUM_CTX` | `2048` | Context window size |
 | `TTS_VOICE` | `af_heart` | Kokoro voice ID |
-| `TTS_SPEED` | `1.1` | Speech speed multiplier |
+| `TTS_SPEED` | `1.1` | Speech speed |
 | `WHISPER_MODEL` | `base` | Whisper model size |
 
-## Project Structure
+## 📁 Project Structure
 
 ```
-├── main.py            # Entry point — wires everything together
-├── brain.py           # AI brain (Ollama LLM with memory)
-├── voice_input.py     # Mic capture + faster-whisper transcription
-├── voice_output.py    # Kokoro TTS with text preprocessing
-├── gui.py             # Animated desktop GUI with avatar
-├── twitch_bot.py      # Optional Twitch chat integration
+├── main.py            # Entry point — orchestrates all components
+├── brain.py           # AI brain (Ollama LLM + conversation memory)
+├── voice_input.py     # Mic capture + faster-whisper (with pre-buffer VAD)
+├── voice_output.py    # Kokoro neural TTS + async pipeline
+├── gui.py             # Animated avatar GUI (VTuber-style)
+├── twitch_bot.py      # Optional Twitch chat bot
 ├── video_capture.py   # Optional webcam capture
 ├── logging_config.py  # Centralized logging
 ├── assets/
 │   └── avatar.png     # AI companion avatar
-├── .env.example       # Environment variable template
-└── requirements.txt   # Python dependencies
+├── .env.example       # Environment template
+├── requirements.txt   # Python dependencies
+├── LICENSE            # MIT License
+└── README.md          # This file
 ```
 
-## License
+## 🏗 Architecture
 
-MIT License — see [LICENSE](LICENSE).
+```mermaid
+graph LR
+    A[Microphone] -->|Audio| B[faster-whisper STT]
+    B -->|Text| C[Ollama LLM Brain]
+    C -->|Streamed text| D[Kokoro TTS]
+    D -->|Audio| E[Speaker]
+    C -.->|Updates| F[GUI Avatar]
+    F -.->|Status| G[Twitch Bot]
+```
+
+## 📄 License
+
+MIT — see [LICENSE](LICENSE).
 
 ---
 
-*Built with ❤️ for the Tarkov community.*
+*Built with ❤️ for the Tarkov community by [Bossiq](https://github.com/Bossiq)*

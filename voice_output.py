@@ -1,41 +1,31 @@
-import os
-import time
 import subprocess
-import soundfile as sf
-import sounddevice as sd
+
 
 class VoiceOutput:
-    def __init__(self, model="piper/operator.onnx", executable="piper/piper.exe"):
-        self.model = model
-        self.executable = executable
+    def __init__(self, gui_callback=None):
+        """
+        Initializes the VoiceOutput using macOS native 'say' command.
+
+        Args:
+            gui_callback: Optional callable(str) to send speech text to the GUI log.
+        """
+        self.gui_callback = gui_callback
 
     def speak(self, text):
-        """Generates and plays speech audio via offline Piper TTS CLI."""
-        print(f"PMC Output: {text}")
-        
-        unique_filename = f'pmc_output_{int(time.time())}.wav'
-        
+        """Speaks the given text aloud using the macOS 'say' command."""
+        if not text or not text.strip():
+            return
+
+        if self.gui_callback:
+            self.gui_callback(f"🎙 PMC: {text}")
+
         try:
-            # Generate the audio blockingly using Piper TTS CLI
-            subprocess.run(
-                [self.executable, '--model', self.model, '--output_file', unique_filename],
-                input=text.encode('utf-8'),
-                check=True
-            )
-            
-            # Play the audio using sounddevice blockingly
-            data, fs = sf.read(unique_filename)
-            sd.play(data, fs)
-            sd.wait()
-            
+            subprocess.run(['say', text], check=True)
+        except FileNotFoundError:
+            print("Error: 'say' command not found. Are you on macOS?")
         except Exception as e:
             print(f"TTS Error: {e}")
-        finally:
-            if os.path.exists(unique_filename):
-                try:
-                    os.remove(unique_filename)
-                except Exception as cleanup_error:
-                    pass
+
 
 if __name__ == "__main__":
     vo = VoiceOutput()

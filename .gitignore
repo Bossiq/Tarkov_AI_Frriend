@@ -12,7 +12,16 @@ env/
 ENV/
 .venv/
 
+# macOS
+.DS_Store
+
+# Temp audio/image files
+*.wav
+*.mp3
+latest_frame.jpg
+
 # Antigravity/IDE specific
 .vscode/
 .idea/
+.gemini/
 piper/

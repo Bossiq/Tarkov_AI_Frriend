@@ -34,7 +34,7 @@ _VOICES_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/mod
 
 # ── Defaults ─────────────────────────────────────────────────────────
 _DEFAULT_VOICE = "af_heart"     # Female voice — warm, natural
-_DEFAULT_SPEED = 1.1
+_DEFAULT_SPEED = 1.2
 _DEFAULT_LANG = "en-us"
 _SAY_TIMEOUT_S = 30
 _FADE_MS = 3                    # Very gentle 3ms fade (just anti-click)

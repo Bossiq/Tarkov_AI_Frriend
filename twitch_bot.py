@@ -1,63 +1,88 @@
+"""
+Twitch Bot — chat integration for PMC Overwatch.
+
+Connects to Twitch IRC via TwitchIO and forwards relevant messages
+to the main system for AI response generation.
+"""
+
+import asyncio
+import logging
 import os
+from typing import Callable, Optional
+
 from twitchio.ext import commands
 
+logger = logging.getLogger(__name__)
+
+
 class TwitchBot(commands.Bot):
-    def __init__(self, token_env="TWITCH_TOKEN", prefix="!"):
-        token = os.getenv(token_env)
-        channels = os.getenv("TWITCH_INITIAL_CHANNELS", "").split(',')
-        # Remove empty strings
-        channels = [c.strip() for c in channels if c.strip()]
-        
+    """TwitchIO-based chat bot for handling viewer interactions."""
+
+    def __init__(self) -> None:
+        token = os.getenv("TWITCH_TOKEN", "")
+        raw_channels = os.getenv("TWITCH_INITIAL_CHANNELS", "")
+        channels = [c.strip() for c in raw_channels.split(",") if c.strip()]
+
         if not token:
-            print(f"WARNING: {token_env} not found in environment variables.")
-            token = "dummy_token"
-            
+            raise ValueError(
+                "TWITCH_TOKEN is not set. "
+                "Add it to your .env file (see .env.example)."
+            )
+
         if not channels:
-            print("WARNING: TWITCH_INITIAL_CHANNELS not found in environment variables.")
-            channels = ["default_channel"]
+            raise ValueError(
+                "TWITCH_INITIAL_CHANNELS is not set. "
+                "Add at least one channel to your .env file."
+            )
 
-        super().__init__(token=token, prefix=prefix, initial_channels=channels)
-        self.message_callback = None
-        self.system_reference = None
+        super().__init__(token=token, prefix="!", initial_channels=channels)
+        self._message_callback: Optional[Callable] = None
+        self._system_ref: Optional[object] = None
 
-    def set_system_reference(self, system):
-        """Stores a reference to the main SCAVESystem for async task spawning."""
-        self.system_reference = system
+    # ── Configuration ─────────────────────────────────────────────────
+    def set_system_reference(self, system: object) -> None:
+        """Store a reference to the main SCAVESystem."""
+        self._system_ref = system
 
-    def set_callback(self, callback):
-        """Sets the callback function to handle incoming chat messages."""
-        self.message_callback = callback
+    def set_callback(self, callback: Callable) -> None:
+        """Set the callback invoked for relevant chat messages."""
+        self._message_callback = callback
 
-    async def event_ready(self):
-        print(f'Twitch Bot logged in as | {self.nick}')
-        print(f'Connected channels: {self.connected_channels}')
-        
-        # Start the continuous listening loop now that the event loop is definitely running
-        if self.system_reference:
-            self.loop.create_task(self.system_reference.continuous_listening_loop())
+    # ── Events ────────────────────────────────────────────────────────
+    async def event_ready(self) -> None:
+        logger.info("Twitch bot logged in as %s", self.nick)
+        logger.info("Connected channels: %s", self.connected_channels)
 
-    async def event_message(self, message):
+    async def event_message(self, message) -> None:
         if message.echo:
             return
 
-        print(f"[Twitch {message.channel.name}] {message.author.name}: {message.content}")
+        logger.debug(
+            "[%s] %s: %s",
+            message.channel.name,
+            message.author.name,
+            message.content,
+        )
 
-        if self.message_callback:
-            # Pass message to the main system
-            import asyncio
-            if asyncio.iscoroutinefunction(self.message_callback):
-                await self.message_callback(message.author.name, message.content)
+        if self._message_callback:
+            if asyncio.iscoroutinefunction(self._message_callback):
+                await self._message_callback(message.author.name, message.content)
             else:
-                self.message_callback(message.author.name, message.content)
+                self._message_callback(message.author.name, message.content)
 
         await self.handle_commands(message)
 
+    # ── Commands ──────────────────────────────────────────────────────
     @commands.command()
-    async def hello(self, ctx: commands.Context):
-        await ctx.send(f'Hello {ctx.author.name}!')
+    async def hello(self, ctx: commands.Context) -> None:
+        await ctx.send(f"Hello {ctx.author.name}!")
+
 
 if __name__ == "__main__":
     from dotenv import load_dotenv
+    from logging_config import setup_logging
+
+    setup_logging()
     load_dotenv()
     bot = TwitchBot()
     bot.run()

@@ -1,27 +1,50 @@
-# Python ignored files
+# ── Python ────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
 *$py.class
+*.egg-info/
+dist/
+build/
 
-# Environment variables
+# ── Environment ───────────────────────────────────────────────────────
 .env
 
-# Virtual environments
+# ── Virtual environments ──────────────────────────────────────────────
 venv/
 env/
 ENV/
 .venv/
 
-# macOS
+# ── macOS ─────────────────────────────────────────────────────────────
 .DS_Store
+._*
 
-# Temp audio/image files
-*.wav
-*.mp3
-latest_frame.jpg
+# ── Windows ───────────────────────────────────────────────────────────
+Thumbs.db
+desktop.ini
 
-# Antigravity/IDE specific
+# ── IDEs ──────────────────────────────────────────────────────────────
 .vscode/
 .idea/
 .gemini/
+*.swp
+*.swo
+
+# ── Temp audio / image files ─────────────────────────────────────────
+*.wav
+*.mp3
+latest_frame.jpg
+current_request.wav
+
+# ── AI / TTS model files (Phase 2+) ──────────────────────────────────
+models/
+*.onnx
+*.pt
+*.pth
+*.bin
+*.gguf
+*.safetensors
+
+# ── Legacy artifacts ──────────────────────────────────────────────────
 piper/
+piper.zip

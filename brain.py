@@ -1,67 +1,98 @@
+"""
+AI Brain — local inference via Ollama for PMC Overwatch.
+
+Sends chat requests to a locally running Ollama instance.
+Fully offline — no API keys, no cloud dependencies.
+"""
+
+import logging
 import os
-from google import genai
-from google.genai import types
+from typing import Optional
+
+import ollama
+
+logger = logging.getLogger(__name__)
+
+# ── Constants ────────────────────────────────────────────────────────
+_DEFAULT_MODEL = "mistral"
+_SYSTEM_INSTRUCTION = (
+    "You are a highly serious, battle-hardened Veteran PMC Operator providing tactical overwatch. "
+    "Speak ONLY in English. NEVER use Russian slang. "
+    "Be concise, professional, and tactical. "
+    "Keep responses under 3 sentences unless more detail is explicitly requested."
+)
+
 
 class Brain:
-    def __init__(self):
-        # API key is automatically picked up from GEMINI_API_KEY env var
-        api_key = os.getenv("GEMINI_API_KEY")
-        if not api_key:
-            print("WARNING: GEMINI_API_KEY not found in environment variables.")
-            
-        self.client = genai.Client(api_key=api_key)
-        self.system_instruction = (
-            "You are a highly serious, battle-hardened Veteran PMC Operator providing tactical overwatch. "
-            "Speak ONLY in English. NEVER use Russian slang. "
-            "Be concise, professional, and tactical."
-        )
+    """Wraps the Ollama client for generating tactical responses locally."""
 
-    def generate_response(self, text_prompt=None, image_path=None, audio_path=None):
-        """Generates a response from the GenAI model using any combination of text, images, and audio."""
-        contents = []
+    def __init__(self) -> None:
+        self._model = os.getenv("OLLAMA_MODEL", _DEFAULT_MODEL)
 
-        if image_path and os.path.exists(image_path):
-            print(f"Uploading image: {image_path}")
-            try:
-                image_file = self.client.files.upload(path=image_path)
-                contents.append(image_file)
-            except Exception as e:
-                print(f"Error uploading image: {e}")
+        # Verify Ollama is reachable
+        try:
+            ollama.list()
+            logger.info("Brain connected to Ollama (model=%s)", self._model)
+        except Exception as exc:
+            raise ConnectionError(
+                f"Cannot connect to Ollama. Is it running? "
+                f"Start it with: brew services start ollama  (Mac) "
+                f"or launch the Ollama app (Windows).  Error: {exc}"
+            ) from exc
 
-        if audio_path and os.path.exists(audio_path):
-            print(f"Reading audio: {audio_path}")
-            try:
-                import pathlib
-                audio_bytes = pathlib.Path(audio_path).read_bytes()
-                audio_part = types.Part.from_bytes(data=audio_bytes, mime_type='audio/wav')
-                contents.append(audio_part)
-            except Exception as e:
-                print(f"Error reading audio: {e}")
+    # ── Public API ────────────────────────────────────────────────────
+    def generate_response(
+        self,
+        text_prompt: Optional[str] = None,
+        image_path: Optional[str] = None,
+        audio_path: Optional[str] = None,
+    ) -> str:
+        """Generate a response from a text prompt.
 
-        if text_prompt:
-            contents.append(text_prompt)
+        Audio must be pre-transcribed to text before calling this method.
+        Image support is deferred to a future vision-model upgrade.
 
-        if not contents:
+        Returns the model's text response, or a fallback error string.
+        """
+        if not text_prompt or not text_prompt.strip():
+            logger.warning("generate_response called with no text input")
             return "No input provided to the system."
 
+        return self._call_model(text_prompt)
+
+    # ── Private ───────────────────────────────────────────────────────
+    def _call_model(self, prompt: str) -> str:
+        """Send a chat request to Ollama and return the text response."""
         try:
-            print("Generating GenAI response...")
-            response = self.client.models.generate_content(
-                model='gemini-2.5-flash',
-                contents=contents,
-                config=types.GenerateContentConfig(
-                    system_instruction=self.system_instruction,
-                    temperature=0.8,
-                )
+            logger.info("Requesting response from Ollama (%s) …", self._model)
+            response = ollama.chat(
+                model=self._model,
+                messages=[
+                    {"role": "system", "content": _SYSTEM_INSTRUCTION},
+                    {"role": "user", "content": prompt},
+                ],
             )
-            return response.text
-        except Exception as e:
-            print(f"GenAI Error: {e}")
+            text = response["message"]["content"]
+            if not text or not text.strip():
+                logger.warning("Model returned empty response")
+                return "No response received from the AI."
+            return text.strip()
+        except ollama.ResponseError as exc:
+            logger.error("Ollama response error: %s", exc)
+            if "not found" in str(exc).lower():
+                return (
+                    f"Model '{self._model}' not found. "
+                    f"Run: ollama pull {self._model}"
+                )
+            return "Comms error. Check Ollama status."
+        except Exception:
+            logger.exception("Ollama request failed")
             return "Comms error. Retrying connection."
 
+
 if __name__ == "__main__":
-    from dotenv import load_dotenv
-    load_dotenv()
+    from logging_config import setup_logging
+
+    setup_logging()
     brain = Brain()
-    # Test text prompt only
-    print(brain.generate_response(text_prompt="Say hello like a true Scav!"))
+    print(brain.generate_response(text_prompt="Say hello like a true PMC operator."))

@@ -1,12 +1,11 @@
 """
-PMC Overwatch GUI — stream-ready dark-mode interface with animated AI avatar.
+PMC Overwatch GUI — stream-ready animated AI avatar.
 
-The avatar uses a VTuber-inspired approach:
-  • Clean high-res face displayed on transparent-matching dark background
-  • Animated breathing glow aura that intensifies when speaking
-  • Equalizer-style sound bars below chin for voice activity
-  • Gentle floating/breathing bob animation for lifelike feel
-  • All animation driven by state: idle → listening → thinking → speaking
+Avatar animation uses frame-swapping between 3 pre-rendered expressions:
+  • Idle: eyes open, gentle smile (avatar.png)
+  • Speaking: mouth open, talking (avatar_speaking.png)
+  • Blinking: eyes closed (avatar_blinking.png)
+Swaps between frames based on state, with randomized blinking.
 """
 
 import logging
@@ -29,7 +28,12 @@ except ImportError:
     _HAS_PIL = False
 
 # ── Paths ────────────────────────────────────────────────────────────
-_AVATAR_PATH = Path(__file__).parent / "assets" / "avatar.png"
+_ASSETS = Path(__file__).parent / "assets"
+_FRAMES = {
+    "idle": _ASSETS / "avatar.png",
+    "speaking": _ASSETS / "avatar_speaking.png",
+    "blinking": _ASSETS / "avatar_blinking.png",
+}
 
 # ── Palette ──────────────────────────────────────────────────────────
 _BG = "#0d1117"
@@ -41,28 +45,23 @@ _RED = "#da3633"
 _RED_H = "#b62324"
 _AMBER = "#d29922"
 _CYAN = "#58a6ff"
-_PURPLE = "#bc8cff"
 _TEXT = "#e6edf3"
 _TEXT2 = "#8b949e"
 _MUTED = "#484f58"
 _BORDER = "#30363d"
 
 # Avatar
-_AV_SIZE = 180          # Avatar image size
-_CANVAS_W = 280         # Canvas width (room for glow)
-_CANVAS_H = 260         # Canvas height (room for bars)
-_EQ_BARS = 9            # Number of equalizer bars
-_EQ_BAR_W = 6           # Bar width
-_EQ_GAP = 3             # Bar gap
-_FPS = 20
+_AV_SIZE = 200
+_CANVAS_SIZE = _AV_SIZE + 32
+_FPS = 15
 
 
 class OverwatchGUI(ctk.CTk):
     def __init__(self) -> None:
         super().__init__()
         self.title("PMC Overwatch — Tarkov AI")
-        self.geometry("760x700")
-        self.minsize(560, 520)
+        self.geometry("760x680")
+        self.minsize(560, 500)
         ctk.set_appearance_mode("dark")
         self.configure(fg_color=_BG)
 
@@ -80,13 +79,21 @@ class OverwatchGUI(ctk.CTk):
         self._pulse_vis = True
         self._dot_color = _MUTED
 
-        # Equalizer bar heights (smooth targets + current)
-        self._eq_target = [0.0] * _EQ_BARS
-        self._eq_current = [0.0] * _EQ_BARS
+        # Blink timing
+        self._blink_active = False
+        self._blink_frames_left = 0
+        self._next_blink_at = random.randint(40, 80)  # frames until next blink
+        self._frame_counter = 0
 
-        # Avatar image
-        self._av_photo: Optional[ImageTk.PhotoImage] = None
-        self._load_avatar()
+        # Speaking mouth toggle (alternates between idle/speaking frames)
+        self._speak_mouth_open = False
+        self._speak_toggle_counter = 0
+
+        # Avatar frames
+        self._avatar_frames: dict[str, Optional[ImageTk.PhotoImage]] = {
+            "idle": None, "speaking": None, "blinking": None,
+        }
+        self._load_frames()
 
         # Build
         self._build_header()
@@ -96,25 +103,30 @@ class OverwatchGUI(ctk.CTk):
         self._start_anim()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
-    # ── Load avatar ──────────────────────────────────────────────────
-    def _load_avatar(self) -> None:
-        if not _HAS_PIL or not _AVATAR_PATH.exists():
+    def _load_frames(self) -> None:
+        """Load and prepare all avatar expression frames."""
+        if not _HAS_PIL:
             return
-        try:
-            img = Image.open(_AVATAR_PATH).convert("RGBA")
-            img = img.resize((_AV_SIZE, _AV_SIZE), Image.LANCZOS)
-            # Circular mask with anti-aliased edge
-            mask = Image.new("L", (_AV_SIZE, _AV_SIZE), 0)
-            d = ImageDraw.Draw(mask)
-            d.ellipse((0, 0, _AV_SIZE - 1, _AV_SIZE - 1), fill=255)
-            mask = mask.filter(ImageFilter.GaussianBlur(1))
-            img.putalpha(mask)
-            # Composite onto app background colour
-            bg = Image.new("RGBA", (_AV_SIZE, _AV_SIZE), (13, 17, 23, 255))
-            bg.paste(img, (0, 0), img)
-            self._av_photo = ImageTk.PhotoImage(bg.convert("RGB"))
-        except Exception:
-            logger.exception("Avatar load failed")
+        for name, path in _FRAMES.items():
+            if not path.exists():
+                logger.warning("Avatar frame missing: %s", path)
+                continue
+            try:
+                img = Image.open(path).convert("RGBA")
+                img = img.resize((_AV_SIZE, _AV_SIZE), Image.LANCZOS)
+                # Circular mask with soft edge
+                mask = Image.new("L", (_AV_SIZE, _AV_SIZE), 0)
+                d = ImageDraw.Draw(mask)
+                d.ellipse((0, 0, _AV_SIZE - 1, _AV_SIZE - 1), fill=255)
+                mask = mask.filter(ImageFilter.GaussianBlur(1))
+                img.putalpha(mask)
+                # Composite on dark bg
+                bg = Image.new("RGBA", (_AV_SIZE, _AV_SIZE), (13, 17, 23, 255))
+                bg.paste(img, (0, 0), img)
+                self._avatar_frames[name] = ImageTk.PhotoImage(bg.convert("RGB"))
+                logger.info("Loaded avatar frame: %s", name)
+            except Exception:
+                logger.exception("Failed to load frame: %s", name)
 
     # ══════════════════════════════════════════════════════════════════
     #  HEADER
@@ -136,8 +148,7 @@ class OverwatchGUI(ctk.CTk):
                      font=ctk.CTkFont(size=20, weight="bold"),
                      text_color=_TEXT).pack(anchor="w")
         ctk.CTkLabel(ttl, text="Tarkov AI Companion",
-                     font=ctk.CTkFont(size=11),
-                     text_color=_TEXT2).pack(anchor="w")
+                     font=ctk.CTkFont(size=11), text_color=_TEXT2).pack(anchor="w")
 
         self._btn = ctk.CTkButton(
             inner, text="▶  Start Overwatch", width=180, height=42,
@@ -147,91 +158,69 @@ class OverwatchGUI(ctk.CTk):
         self._btn.pack(side="right")
 
     # ══════════════════════════════════════════════════════════════════
-    #  AVATAR — canvas with face, glow, EQ bars
+    #  AVATAR — frame-swapping animation
     # ══════════════════════════════════════════════════════════════════
     def _build_avatar(self) -> None:
-        # No card frame — avatar floats directly on the dark background
         self._cv = tk.Canvas(
-            self, width=_CANVAS_W, height=_CANVAS_H,
+            self, width=_CANVAS_SIZE, height=_CANVAS_SIZE,
             bg=_BG, highlightthickness=0, bd=0,
         )
         self._cv.pack(pady=(10, 0))
 
-        # Status label under canvas
         self._av_status = ctk.CTkLabel(
             self, text="Offline",
             font=ctk.CTkFont(size=13, weight="bold"), text_color=_MUTED,
         )
-        self._av_status.pack(pady=(0, 4))
+        self._av_status.pack(pady=(2, 4))
 
-    # ── Render one animation frame ────────────────────────────────────
+    def _get_current_frame(self) -> Optional[ImageTk.PhotoImage]:
+        """Decide which frame to show based on state + blink/speak timing."""
+        # Blink takes priority (brief overlay)
+        if self._blink_active and self._avatar_frames.get("blinking"):
+            return self._avatar_frames["blinking"]
+
+        # Speaking: alternate between idle and speaking frames
+        if self._mode == "speaking" and self._speak_mouth_open:
+            return self._avatar_frames.get("speaking") or self._avatar_frames.get("idle")
+
+        # Thinking: show speaking frame (slightly open mouth)
+        if self._mode == "thinking":
+            return self._avatar_frames.get("speaking") or self._avatar_frames.get("idle")
+
+        return self._avatar_frames.get("idle")
+
     def _render_frame(self) -> None:
         cv = self._cv
         cv.delete("all")
-        cx = _CANVAS_W // 2
-        # Gentle vertical bob: avatar breathes up/down 2px
-        bob = math.sin(self._phase * 0.6) * 2.0
-        cy = (_CANVAS_H // 2) - 20 + bob
+        cx = _CANVAS_SIZE // 2
+        # Gentle bob
+        bob = math.sin(self._phase * 0.5) * 2.0
+        cy = _CANVAS_SIZE // 2 + bob
         r = _AV_SIZE // 2
 
-        # ── Glow aura ────────────────────────────────────────────────
+        # Glow ring
         if self._mode == "speaking":
-            glow_color = _CYAN
-            glow_alpha = 0.5 + math.sin(self._phase * 1.5) * 0.3
-            glow_r = r + 12 + math.sin(self._phase * 2) * 4
+            glow_color, glow_extra = _CYAN, 4 + math.sin(self._phase * 1.5) * 3
         elif self._mode == "thinking":
-            glow_color = _AMBER
-            glow_alpha = 0.4 + math.sin(self._phase * 2) * 0.2
-            glow_r = r + 10
+            glow_color, glow_extra = _AMBER, 2
         elif self._mode == "listening":
-            glow_color = _GREEN
-            glow_alpha = 0.3 + math.sin(self._phase * 0.8) * 0.1
-            glow_r = r + 8
+            glow_color, glow_extra = _GREEN, 2
         else:
-            glow_color = _MUTED
-            glow_alpha = 0.2
-            glow_r = r + 6
+            glow_color, glow_extra = _MUTED, 0
 
-        # Draw concentric glow rings (fake transparency with brightness)
-        for i in range(3):
-            ring_r = glow_r + i * 4
-            w = max(1, 3 - i)
-            cv.create_oval(
-                cx - ring_r, cy - ring_r, cx + ring_r, cy + ring_r,
-                outline=glow_color, width=w,
-            )
+        glow_r = r + 10 + glow_extra
+        pulse_w = 2 + int((math.sin(self._phase) + 1) * 1.5)
+        cv.create_oval(cx - glow_r, cy - glow_r, cx + glow_r, cy + glow_r,
+                       outline=glow_color, width=pulse_w)
 
-        # ── Avatar image ─────────────────────────────────────────────
-        if self._av_photo is not None:
-            cv.create_image(cx, cy, image=self._av_photo, anchor="center")
+        # Avatar image
+        frame = self._get_current_frame()
+        if frame is not None:
+            cv.create_image(cx, cy, image=frame, anchor="center")
         else:
             cv.create_oval(cx - r, cy - r, cx + r, cy + r,
                            fill=_SURFACE, outline=_BORDER, width=2)
             cv.create_text(cx, cy, text="🎮", font=("", 48))
-
-        # ── Equalizer bars below avatar (voice activity indicator) ────
-        eq_total_w = _EQ_BARS * _EQ_BAR_W + (_EQ_BARS - 1) * _EQ_GAP
-        eq_x_start = cx - eq_total_w // 2
-        eq_y_base = cy + r + 16  # Just below the avatar circle
-
-        for i in range(_EQ_BARS):
-            bh = max(2, int(self._eq_current[i] * 30))
-            x = eq_x_start + i * (_EQ_BAR_W + _EQ_GAP)
-            # Gradient colour per bar: centre bars are brightest
-            center_factor = 1.0 - abs(i - _EQ_BARS // 2) / (_EQ_BARS // 2) * 0.5
-            if self._mode == "speaking":
-                bar_color = _CYAN
-            elif self._mode == "thinking":
-                bar_color = _AMBER
-            elif self._mode == "listening":
-                bar_color = _GREEN
-            else:
-                bar_color = _MUTED
-
-            cv.create_rectangle(
-                x, eq_y_base - bh, x + _EQ_BAR_W, eq_y_base,
-                fill=bar_color, outline="",
-            )
 
     # ── Animation loop ────────────────────────────────────────────────
     def _start_anim(self) -> None:
@@ -240,26 +229,28 @@ class OverwatchGUI(ctk.CTk):
     def _tick(self) -> None:
         if self.shutdown_event.is_set():
             return
-        self._phase += 0.15
+        self._phase += 0.12
+        self._frame_counter += 1
 
-        # Update EQ bar targets
+        # ── Blink logic ──────────────────────────────────────────────
+        if self._blink_active:
+            self._blink_frames_left -= 1
+            if self._blink_frames_left <= 0:
+                self._blink_active = False
+                self._next_blink_at = self._frame_counter + random.randint(40, 90)
+        elif self._frame_counter >= self._next_blink_at:
+            self._blink_active = True
+            self._blink_frames_left = 3  # Blink lasts 3 frames (~200ms)
+
+        # ── Mouth toggle for speaking ─────────────────────────────────
         if self._mode == "speaking":
-            for i in range(_EQ_BARS):
-                center = 1.0 - abs(i - _EQ_BARS // 2) / (_EQ_BARS // 2) * 0.4
-                self._eq_target[i] = max(0.15, (0.5 + random.uniform(-0.3, 0.3)) * center)
-        elif self._mode == "thinking":
-            for i in range(_EQ_BARS):
-                self._eq_target[i] = (math.sin(self._phase * 2 + i * 0.5) + 1) * 0.2
-        elif self._mode == "listening":
-            for i in range(_EQ_BARS):
-                self._eq_target[i] = 0.05 + (math.sin(self._phase * 0.5 + i * 0.3) + 1) * 0.05
+            self._speak_toggle_counter += 1
+            if self._speak_toggle_counter >= random.randint(2, 5):
+                self._speak_mouth_open = not self._speak_mouth_open
+                self._speak_toggle_counter = 0
         else:
-            for i in range(_EQ_BARS):
-                self._eq_target[i] = 0.0
-
-        # Smooth interpolation
-        for i in range(_EQ_BARS):
-            self._eq_current[i] += (self._eq_target[i] - self._eq_current[i]) * 0.4
+            self._speak_mouth_open = False
+            self._speak_toggle_counter = 0
 
         self._render_frame()
         self._anim_id = self.after(1000 // _FPS, self._tick)
@@ -290,14 +281,13 @@ class OverwatchGUI(ctk.CTk):
         ft.pack_propagate(False)
         inner = ctk.CTkFrame(ft, fg_color="transparent")
         inner.pack(fill="x", padx=16, pady=8)
-
         self._dot = ctk.CTkLabel(inner, text="●", font=ctk.CTkFont(size=12),
                                  text_color=_MUTED, width=16)
         self._dot.pack(side="left", padx=(0, 6))
         self._status_lbl = ctk.CTkLabel(inner, text="Offline",
                                         font=ctk.CTkFont(size=12), text_color=_TEXT2)
         self._status_lbl.pack(side="left")
-        ctk.CTkLabel(inner, text="v3.0", font=ctk.CTkFont(size=11),
+        ctk.CTkLabel(inner, text="v3.1", font=ctk.CTkFont(size=11),
                      text_color=_MUTED).pack(side="right")
 
     # ══════════════════════════════════════════════════════════════════

@@ -22,7 +22,7 @@ import ollama
 logger = logging.getLogger(__name__)
 
 # ── Constants ────────────────────────────────────────────────────────
-_DEFAULT_MODEL = "mistral"
+_DEFAULT_MODEL = "qwen2.5:1.5b"
 _DEFAULT_NUM_CTX = 1024         # Minimal context = fastest generation
 _DEFAULT_NUM_PREDICT = 80       # Max output tokens (~2-3 sentences)
 _DEFAULT_TEMPERATURE = 0.6

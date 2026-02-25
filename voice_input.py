@@ -161,9 +161,13 @@ class VoiceInput:
                                 logger.warning("Max duration (%ss) — no audio", self.max_duration)
                                 break
                         # Don't hang forever waiting for speech either
-                        if not is_recording and time.monotonic() - listen_start > 120:
+                        wait_elapsed = time.monotonic() - listen_start
+                        if not is_recording and wait_elapsed > 120:
                             logger.warning("No speech for 120s — recalibrating")
                             return None
+                        # Periodic feedback every 30s
+                        if not is_recording and int(wait_elapsed) % 30 == 0 and int(wait_elapsed) > 0:
+                            logger.info("Still listening (%.0fs)…", wait_elapsed)
                         continue
 
                     rms = float(np.sqrt(np.mean(chunk ** 2)))

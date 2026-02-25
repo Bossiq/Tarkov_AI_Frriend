@@ -106,9 +106,10 @@ class OverwatchGUI(ctk.CTk):
         # Particles
         self._particles = [_Particle() for _ in range(_N_PARTICLES)]
 
-        # Load avatar
-        self._av_photo: Optional[ImageTk.PhotoImage] = None
-        self._load_avatar()
+        # Load avatar — pre-render breathing scale frames
+        self._av_frames: list[ImageTk.PhotoImage] = []
+        self._n_breathe = 12
+        self._load_avatar_frames()
 
         self._build_header()
         self._build_avatar()
@@ -117,20 +118,29 @@ class OverwatchGUI(ctk.CTk):
         self._start_anim()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
-    def _load_avatar(self) -> None:
+    def _load_avatar_frames(self) -> None:
+        """Pre-render breathing scale frames (±2%) for organic animation."""
         if not _HAS_PIL or not _AVATAR_PATH.exists():
             return
         try:
-            img = Image.open(_AVATAR_PATH).convert("RGBA")
-            img = img.resize((_AV_SIZE, _AV_SIZE), Image.LANCZOS)
-            mask = Image.new("L", (_AV_SIZE, _AV_SIZE), 0)
-            d = ImageDraw.Draw(mask)
-            d.ellipse((0, 0, _AV_SIZE - 1, _AV_SIZE - 1), fill=255)
-            mask = mask.filter(ImageFilter.GaussianBlur(1))
-            img.putalpha(mask)
-            bg = Image.new("RGBA", (_AV_SIZE, _AV_SIZE), (13, 17, 23, 255))
-            bg.paste(img, (0, 0), img)
-            self._av_photo = ImageTk.PhotoImage(bg.convert("RGB"))
+            src = Image.open(_AVATAR_PATH).convert("RGBA")
+            for i in range(self._n_breathe):
+                # Sine wave scale: 0.98 to 1.02
+                t = i / self._n_breathe
+                scale = 1.0 + 0.02 * math.sin(t * 2 * math.pi)
+                sz = int(_AV_SIZE * scale)
+                img = src.resize((sz, sz), Image.LANCZOS)
+                # Circular mask
+                mask = Image.new("L", (sz, sz), 0)
+                d = ImageDraw.Draw(mask)
+                d.ellipse((0, 0, sz - 1, sz - 1), fill=255)
+                mask = mask.filter(ImageFilter.GaussianBlur(1))
+                img.putalpha(mask)
+                # Composite on bg
+                bg = Image.new("RGBA", (sz, sz), (13, 17, 23, 255))
+                bg.paste(img, (0, 0), img)
+                self._av_frames.append(ImageTk.PhotoImage(bg.convert("RGB")))
+            logger.info("Loaded %d breathing frames", len(self._av_frames))
         except Exception:
             logger.exception("Avatar load failed")
 
@@ -212,9 +222,14 @@ class OverwatchGUI(ctk.CTk):
                        cx + sway + mid_r, cy + mid_r,
                        outline=glow_c, width=ring_w)
 
-        # ── Avatar image ──────────────────────────────────────────────
-        if self._av_photo is not None:
-            cv.create_image(cx + sway, cy, image=self._av_photo, anchor="center")
+        # ── Avatar image (breathing scale) ─────────────────────────────
+        if self._av_frames:
+            # Pick breathing frame based on phase
+            breathe_t = (math.sin(self._phase * 0.35) + 1) * 0.5
+            frame_idx = int(breathe_t * (len(self._av_frames) - 1))
+            frame_idx = min(frame_idx, len(self._av_frames) - 1)
+            cv.create_image(cx + sway, cy, image=self._av_frames[frame_idx],
+                            anchor="center")
         else:
             cv.create_oval(cx - r, cy - r, cx + r, cy + r,
                            fill=_SURFACE, outline=_BORDER, width=2)

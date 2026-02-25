@@ -100,7 +100,7 @@ TerraGroup Employee: Find TerraGroup info
 Introduction: Find Jaeger's camp note on Woods (near crashed plane) — unlocks Jaeger
 Gunsmith Part 1: Build MP-133 to exact specs (see wiki for specific mods)
 Gunsmith Part 2-25: Each part requires building a different weapon to exact specifications (MP5, M4, Remington, AKS-74U, etc.)
-A Shooter Born In Heaven: Kill 5 PMCs with headshots from 100+ meters on each of: Customs, Shoreline, Reserve, Woods
+A Shooter Born In Heaven: Kill 5 PMCs with HEADSHOTS using bolt-action rifle on EACH of these 8 maps: Woods, Reserve, Shoreline, Customs, Lighthouse, Streets, Interchange, Ground Zero (NO distance requirement in 1.0 — changed from 100m+ in beta)
 Signal Part 1-4: Install signal jammers on various maps (includes Lighthouse)
 Farming Part 1-4: Related to hideout + bitcoins
 Chemistry Closet: Find lab equipment

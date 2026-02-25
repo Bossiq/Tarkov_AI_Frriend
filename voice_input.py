@@ -1,16 +1,18 @@
 """
 Voice Input — microphone capture with adaptive VAD + local transcription.
 
-Uses ambient noise calibration to resist background music/noise.
-Requires sustained speech before triggering to prevent false activations.
-Transcription via faster-whisper (CTranslate2-optimized Whisper) for
-high-accuracy, fully offline speech-to-text.
+Key features:
+  • Ring buffer keeps audio BEFORE speech is detected (no lost first words)
+  • Adaptive noise calibration resists background music/noise
+  • Longer silence tolerance (2s) prevents cutting mid-sentence
+  • Transcription via faster-whisper (local, offline, accurate)
 """
 
 import logging
 import os
 import time
 import threading
+from collections import deque
 from typing import Optional
 
 import numpy as np
@@ -23,13 +25,14 @@ logger = logging.getLogger(__name__)
 _SAMPLERATE = 16_000
 _CHANNELS = 1
 _CHUNK_SECONDS = 0.1
-_SILENCE_DURATION = 1.2           # seconds of silence before stopping
-_MAX_RECORDING_SECONDS = 30       # safety cap
-_CALIBRATION_SECONDS = 1.0        # how long to sample ambient noise
-_NOISE_MULTIPLIER = 2.5           # threshold = ambient_rms × this
-_MIN_SPEECH_CHUNKS = 3            # require N consecutive loud chunks to start
-_DEFAULT_WHISPER_MODEL = "large-v3-turbo"
-_DEFAULT_COMPUTE_TYPE = "int8"    # fast on Apple Silicon, good accuracy
+_SILENCE_DURATION = 2.0           # 2 seconds of silence = done (was 1.2)
+_MAX_RECORDING_SECONDS = 30
+_CALIBRATION_SECONDS = 1.0
+_NOISE_MULTIPLIER = 2.0           # threshold = ambient × this (was 2.5)
+_MIN_SPEECH_CHUNKS = 2            # 2 chunks (200ms) to confirm speech (was 3)
+_PRE_BUFFER_CHUNKS = 8            # Keep 800ms of audio BEFORE speech detected
+_DEFAULT_WHISPER_MODEL = "base"
+_DEFAULT_COMPUTE_TYPE = "int8"
 
 
 class VoiceInput:
@@ -71,31 +74,22 @@ class VoiceInput:
             compute_type = os.getenv("WHISPER_COMPUTE_TYPE", _DEFAULT_COMPUTE_TYPE)
 
             if self._gui_log:
-                self._gui_log(f"🤖 Loading speech model ({model_name}) — first run may download …")
-            logger.info(
-                "Loading faster-whisper model '%s' (compute=%s) …",
-                model_name, compute_type,
-            )
+                self._gui_log(f"🤖 Loading speech model ({model_name}) …")
+            logger.info("Loading faster-whisper '%s' (compute=%s) …", model_name, compute_type)
 
             from faster_whisper import WhisperModel
-
             self._whisper_model = WhisperModel(
-                model_name,
-                device="cpu",
-                compute_type=compute_type,
+                model_name, device="cpu", compute_type=compute_type,
             )
 
             if self._gui_log:
                 self._gui_log("🤖 Speech model loaded ✅")
-            logger.info("Whisper model loaded successfully")
+            logger.info("Whisper model loaded")
             return self._whisper_model
 
     # ── Adaptive noise calibration ────────────────────────────────────
     def calibrate(self, gui_log=None) -> float:
-        """Sample ambient noise and set an adaptive threshold.
-
-        Returns the computed threshold.
-        """
+        """Sample ambient noise and set an adaptive threshold."""
         if gui_log:
             gui_log("🔊 Calibrating mic — stay quiet for 1 second …")
         logger.info("Calibrating ambient noise level …")
@@ -105,9 +99,7 @@ class VoiceInput:
 
         try:
             with sd.InputStream(
-                samplerate=self.samplerate,
-                channels=self.channels,
-                dtype="float32",
+                samplerate=self.samplerate, channels=self.channels, dtype="float32",
             ) as stream:
                 for _ in range(num_chunks):
                     chunk, _ = stream.read(self._chunk_size)
@@ -119,16 +111,12 @@ class VoiceInput:
             return self._threshold
 
         ambient_rms = float(np.mean(samples)) if samples else 0.005
-        # Floor to prevent near-zero thresholds in silent rooms
-        self._threshold = max(ambient_rms * _NOISE_MULTIPLIER, 0.015)
-        logger.info(
-            "Ambient RMS: %.4f → Threshold: %.4f (×%.1f)",
-            ambient_rms, self._threshold, _NOISE_MULTIPLIER,
-        )
+        self._threshold = max(ambient_rms * _NOISE_MULTIPLIER, 0.012)
+        logger.info("Ambient: %.4f → Threshold: %.4f", ambient_rms, self._threshold)
         if gui_log:
             gui_log(f"🔊 Calibrated (threshold: {self._threshold:.3f})")
 
-        # Pre-load Whisper model in background while user starts talking
+        # Pre-load Whisper in background
         threading.Thread(
             target=self._get_whisper_model, name="WhisperLoad", daemon=True
         ).start()
@@ -139,24 +127,27 @@ class VoiceInput:
     def listen(self, output_filename: str = "temp_audio.wav") -> Optional[str]:
         """Block until speech is detected, recorded, and silence follows.
 
-        Returns the path to the saved WAV file, or None.
+        Uses a ring buffer to keep audio BEFORE speech is confirmed,
+        so the first word is never lost.
         """
-        # Auto-calibrate on first call
         if self._threshold is None:
             self.calibrate()
 
         logger.info("Listening (threshold=%.4f) …", self._threshold)
+
+        # Ring buffer: keeps the last N chunks even before recording starts
+        # This is how we preserve the first word
+        pre_buffer: deque = deque(maxlen=_PRE_BUFFER_CHUNKS)
+
         recorded_frames: list[np.ndarray] = []
         is_recording = False
         silence_start: Optional[float] = None
         recording_start: Optional[float] = None
-        consecutive_loud = 0   # debounce counter
+        consecutive_loud = 0
 
         try:
             with sd.InputStream(
-                samplerate=self.samplerate,
-                channels=self.channels,
-                dtype="float32",
+                samplerate=self.samplerate, channels=self.channels, dtype="float32",
             ) as stream:
                 while not self._shutdown.is_set():
                     chunk, _ = stream.read(self._chunk_size)
@@ -166,18 +157,27 @@ class VoiceInput:
                         consecutive_loud += 1
                         silence_start = None
 
-                        if not is_recording and consecutive_loud >= _MIN_SPEECH_CHUNKS:
-                            # Sustained speech confirmed — start recording
-                            logger.info("Speech detected — recording …")
-                            is_recording = True
-                            recording_start = time.monotonic()
+                        if not is_recording:
+                            # Always buffer pre-speech audio
+                            pre_buffer.append(chunk.copy())
 
-                        if is_recording:
+                            if consecutive_loud >= _MIN_SPEECH_CHUNKS:
+                                # Speech confirmed — start recording
+                                # INCLUDE the pre-buffer so first word isn't lost
+                                logger.info("Speech detected — recording …")
+                                is_recording = True
+                                recording_start = time.monotonic()
+                                recorded_frames.extend(list(pre_buffer))
+                                pre_buffer.clear()
+                        else:
                             recorded_frames.append(chunk.copy())
                     else:
                         consecutive_loud = 0
 
-                        if is_recording:
+                        if not is_recording:
+                            # Keep buffering even during silence
+                            pre_buffer.append(chunk.copy())
+                        else:
                             recorded_frames.append(chunk.copy())
                             if silence_start is None:
                                 silence_start = time.monotonic()
@@ -185,7 +185,7 @@ class VoiceInput:
                                 logger.debug("Silence reached — done")
                                 break
 
-                    # Safety: cap total recording length
+                    # Safety cap
                     if (
                         is_recording
                         and recording_start
@@ -195,31 +195,25 @@ class VoiceInput:
                         break
 
         except sd.PortAudioError:
-            logger.exception("PortAudio error — is a microphone connected?")
+            logger.exception("Mic error — is a microphone connected?")
             return None
         except Exception:
-            logger.exception("Unexpected error in VAD loop")
-            return None
-
-        if self._shutdown.is_set():
-            logger.info("Listening cancelled (shutdown)")
+            logger.exception("Audio capture error")
             return None
 
         if not recorded_frames:
+            logger.debug("No speech detected")
             return None
 
         audio_data = np.concatenate(recorded_frames, axis=0)
         sf.write(output_filename, audio_data, self.samplerate)
         duration = len(audio_data) / self.samplerate
-        logger.info("Saved %.1fs recording → %s", duration, output_filename)
+        logger.info("Recorded %.1fs of audio → %s", duration, output_filename)
         return output_filename
 
     # ── Transcription ─────────────────────────────────────────────────
     def transcribe(self, audio_path: str) -> Optional[str]:
-        """Transcribe a WAV file to text using faster-whisper (local).
-
-        Returns the transcribed text, or None if transcription fails.
-        """
+        """Transcribe a WAV file using faster-whisper (local)."""
         start_time = time.monotonic()
         try:
             model = self._get_whisper_model()
@@ -228,26 +222,20 @@ class VoiceInput:
                 audio_path,
                 language="en",
                 beam_size=5,
-                vad_filter=True,              # filter out non-speech
+                vad_filter=True,
                 vad_parameters=dict(
-                    min_silence_duration_ms=300,
-                    speech_pad_ms=200,
+                    min_silence_duration_ms=500,
+                    speech_pad_ms=300,
                 ),
             )
 
-            # Collect segments into full text
             text_parts = []
             for segment in segments:
                 text_parts.append(segment.text.strip())
 
             text = " ".join(text_parts).strip()
-
             elapsed = time.monotonic() - start_time
-            logger.info(
-                "Transcription (%.1fs): %s",
-                elapsed, text[:100] if text else "(empty)",
-            )
-
+            logger.info("Transcribed in %.1fs: '%s'", elapsed, text[:80] if text else "(empty)")
             return text if text else None
 
         except Exception:
@@ -257,11 +245,11 @@ class VoiceInput:
 
 if __name__ == "__main__":
     from logging_config import setup_logging
-
     setup_logging()
     vi = VoiceInput()
     vi.calibrate()
-    path = vi.listen(output_filename="test_audio.wav")
+    print("Speak now …")
+    path = vi.listen()
     if path:
-        text = vi.transcribe(path)
-        print(f"You said: {text}")
+        result = vi.transcribe(path)
+        print(f"You said: {result}")

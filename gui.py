@@ -1,11 +1,10 @@
 """
-PMC Overwatch GUI — premium dark-mode desktop interface with animated avatar.
+PMC Overwatch GUI — premium dark-mode interface with animated AI avatar.
 
 Features:
-  • Animated AI avatar with glow ring effects (reacts to state)
-  • Animated waveform visualizer (holographic bars)
-  • Pulsing status dot
-  • Sleek dark theme with card-based layout
+  • Large animated AI face: mouth opens/closes when speaking, eyes blink
+  • Animated glow ring around avatar (color per state)
+  • Minimal, stream-friendly dark UI
   • Thread-safe API for background updates
 """
 
@@ -21,9 +20,9 @@ import customtkinter as ctk
 
 logger = logging.getLogger(__name__)
 
-# Try to import PIL for avatar
+# Try PIL for avatar
 try:
-    from PIL import Image, ImageDraw, ImageFilter
+    from PIL import Image, ImageDraw, ImageTk
     _HAS_PIL = True
 except ImportError:
     _HAS_PIL = False
@@ -42,22 +41,13 @@ _ACCENT_RED = "#da3633"
 _ACCENT_RED_HOVER = "#b62324"
 _ACCENT_AMBER = "#d29922"
 _ACCENT_CYAN = "#58a6ff"
-_ACCENT_PURPLE = "#bc8cff"
-_ACCENT_PINK = "#f778ba"
 _TEXT_PRIMARY = "#e6edf3"
 _TEXT_SECONDARY = "#8b949e"
 _TEXT_MUTED = "#484f58"
 _BORDER = "#30363d"
 
-# Visualizer
-_VIS_COLORS = ["#58a6ff", "#79c0ff", "#a5d6ff", "#bc8cff", "#d2a8ff"]
-_VIS_IDLE_COLOR = "#21262d"
-_VIS_BARS = 32
-_VIS_HEIGHT = 60
-_VIS_FPS = 24
-
-# Avatar
-_AVATAR_SIZE = 120
+# Avatar config
+_AVATAR_SIZE = 200
 _RING_COLORS = {
     "idle": "#30363d",
     "listening": "#2ea043",
@@ -73,12 +63,12 @@ class OverwatchGUI(ctk.CTk):
         super().__init__()
 
         self.title("PMC Overwatch — Tarkov AI")
-        self.geometry("820x780")
-        self.minsize(600, 580)
+        self.geometry("820x760")
+        self.minsize(600, 560)
         ctk.set_appearance_mode("dark")
         self.configure(fg_color=_BG_DARK)
 
-        # ── State ─────────────────────────────────────────────────────
+        # State
         self._toggle_callback: Optional[Callable[[bool], None]] = None
         self._is_running = False
         self.shutdown_event = threading.Event()
@@ -89,17 +79,19 @@ class OverwatchGUI(ctk.CTk):
         self._pulse_job: Optional[str] = None
         self._pulse_visible = True
         self._vis_mode = "idle"
-        self._vis_job: Optional[str] = None
-        self._vis_phase = 0.0
-        self._vis_target_h: list[float] = [0.0] * _VIS_BARS
-        self._vis_current_h: list[float] = [0.0] * _VIS_BARS
+        self._anim_phase = 0.0
+        self._anim_job: Optional[str] = None
+        self._blink_state = False
+        self._blink_timer = 0
+        self._mouth_open = 0.0  # 0 = closed, 1 = fully open
+        self._ring_color = _RING_COLORS["idle"]
 
-        # Avatar glow state
-        self._avatar_glow_phase = 0.0
-        self._avatar_ring_color = _RING_COLORS["idle"]
-        self._avatar_job: Optional[str] = None
+        # Avatar images
+        self._avatar_base = None    # PIL Image (no mouth overlay)
+        self._avatar_photo = None   # Current displayed ImageTk.PhotoImage
+        self._avatar_pil = None     # Base PIL RGBA image
 
-        # ── Build UI ──────────────────────────────────────────────────
+        # Build UI
         self._build_header()
         self._build_avatar_section()
         self._build_log()
@@ -122,18 +114,15 @@ class OverwatchGUI(ctk.CTk):
 
         logo = ctk.CTkFrame(inner, fg_color="transparent")
         logo.pack(side="left")
-
         ctk.CTkLabel(
-            logo, text="⚔", font=ctk.CTkFont(size=28),
-            text_color=_ACCENT_GREEN,
+            logo, text="⚔", font=ctk.CTkFont(size=28), text_color=_ACCENT_GREEN,
         ).pack(side="left", padx=(0, 8))
 
         titles = ctk.CTkFrame(logo, fg_color="transparent")
         titles.pack(side="left")
         ctk.CTkLabel(
             titles, text="PMC Overwatch",
-            font=ctk.CTkFont(size=20, weight="bold"),
-            text_color=_TEXT_PRIMARY,
+            font=ctk.CTkFont(size=20, weight="bold"), text_color=_TEXT_PRIMARY,
         ).pack(anchor="w")
         ctk.CTkLabel(
             titles, text="Tarkov AI Companion",
@@ -149,226 +138,171 @@ class OverwatchGUI(ctk.CTk):
         self._toggle_btn.pack(side="right")
 
     # ══════════════════════════════════════════════════════════════════
-    #  AVATAR + VISUALIZER section
+    #  AVATAR SECTION — large animated face
     # ══════════════════════════════════════════════════════════════════
     def _build_avatar_section(self) -> None:
-        """Build the avatar with animated glow ring + waveform bars."""
         section = ctk.CTkFrame(
             self, corner_radius=12, fg_color=_BG_CARD,
             border_width=1, border_color=_BORDER,
         )
         section.pack(fill="x", padx=16, pady=(10, 0))
 
-        # Top row: avatar + info
-        top = ctk.CTkFrame(section, fg_color="transparent")
-        top.pack(fill="x", padx=16, pady=(12, 4))
-
-        # ── Avatar with glow ring ─────────────────────────────────────
-        avatar_frame = ctk.CTkFrame(top, fg_color="transparent")
-        avatar_frame.pack(side="left")
-
-        ring_size = _AVATAR_SIZE + 16
+        # Canvas for the avatar + ring
+        canvas_size = _AVATAR_SIZE + 24
         self._avatar_canvas = ctk.CTkCanvas(
-            avatar_frame, width=ring_size, height=ring_size,
+            section, width=canvas_size, height=canvas_size,
             bg=_BG_CARD, highlightthickness=0,
         )
-        self._avatar_canvas.pack()
+        self._avatar_canvas.pack(pady=(14, 4))
 
-        # Load avatar image
-        self._avatar_photo = None
+        # Load base avatar
         if _HAS_PIL and _AVATAR_PATH.exists():
             try:
                 img = Image.open(_AVATAR_PATH).convert("RGBA")
                 img = img.resize((_AVATAR_SIZE, _AVATAR_SIZE), Image.LANCZOS)
 
-                # Create circular mask
+                # Circular mask
                 mask = Image.new("L", (_AVATAR_SIZE, _AVATAR_SIZE), 0)
                 draw = ImageDraw.Draw(mask)
                 draw.ellipse((0, 0, _AVATAR_SIZE - 1, _AVATAR_SIZE - 1), fill=255)
                 img.putalpha(mask)
 
-                # Composite onto dark background for Tkinter
-                bg = Image.new("RGBA", (_AVATAR_SIZE, _AVATAR_SIZE), (13, 17, 23, 255))
-                bg.paste(img, (0, 0), img)
-                final = bg.convert("RGB")
-
-                import tkinter as tk
-                from PIL import ImageTk
-                self._avatar_photo = ImageTk.PhotoImage(final)
+                self._avatar_pil = img
+                self._render_avatar()
             except Exception:
-                logger.exception("Failed to load avatar image")
+                logger.exception("Failed to load avatar")
 
-        self._draw_avatar_ring()
-
-        # ── Info panel next to avatar ─────────────────────────────────
-        info = ctk.CTkFrame(top, fg_color="transparent")
-        info.pack(side="left", padx=(16, 0), fill="both", expand=True)
-
-        self._avatar_name_label = ctk.CTkLabel(
-            info, text="AI Companion",
-            font=ctk.CTkFont(size=16, weight="bold"),
-            text_color=_TEXT_PRIMARY,
+        # Status label under avatar
+        self._avatar_status = ctk.CTkLabel(
+            section, text="Offline", font=ctk.CTkFont(size=13, weight="bold"),
+            text_color=_TEXT_MUTED,
         )
-        self._avatar_name_label.pack(anchor="w")
+        self._avatar_status.pack(pady=(2, 12))
 
-        self._avatar_status_label = ctk.CTkLabel(
-            info, text="Offline",
-            font=ctk.CTkFont(size=12), text_color=_TEXT_MUTED,
-        )
-        self._avatar_status_label.pack(anchor="w", pady=(2, 0))
+        # Start animation
+        self._start_animation()
 
-        # Mouth/speaking indicator
-        self._mouth_frame = ctk.CTkFrame(info, fg_color="transparent")
-        self._mouth_frame.pack(anchor="w", pady=(8, 0))
+    def _render_avatar(self, mouth_open: float = 0.0, blink: bool = False) -> None:
+        """Render the avatar with mouth and eye animations overlaid."""
+        if self._avatar_pil is None:
+            return
 
-        self._mouth_bars: list[ctk.CTkFrame] = []
-        for i in range(5):
-            bar = ctk.CTkFrame(
-                self._mouth_frame, width=4, height=4,
-                corner_radius=2, fg_color=_TEXT_MUTED,
+        # Start from base image
+        frame = self._avatar_pil.copy()
+        draw = ImageDraw.Draw(frame)
+        cx, cy = _AVATAR_SIZE // 2, _AVATAR_SIZE // 2
+
+        # ── Eye blink: draw dark overlay on eye area ──────────────────
+        if blink:
+            # Semi-transparent eyelid overlay
+            eye_y = int(cy * 0.72)  # eyes are roughly 72% from top
+            eye_w = int(_AVATAR_SIZE * 0.12)
+            eye_h = int(_AVATAR_SIZE * 0.04)
+            left_eye_x = int(cx - _AVATAR_SIZE * 0.15)
+            right_eye_x = int(cx + _AVATAR_SIZE * 0.15)
+            skin = (200, 175, 160, 220)
+            draw.ellipse(
+                [left_eye_x - eye_w, eye_y - eye_h,
+                 left_eye_x + eye_w, eye_y + eye_h],
+                fill=skin
             )
-            bar.pack(side="left", padx=1)
-            self._mouth_bars.append(bar)
+            draw.ellipse(
+                [right_eye_x - eye_w, eye_y - eye_h,
+                 right_eye_x + eye_w, eye_y + eye_h],
+                fill=skin
+            )
 
-        # ── Waveform visualizer ───────────────────────────────────────
-        self._vis_canvas = ctk.CTkCanvas(
-            section, height=_VIS_HEIGHT, bg=_BG_CARD, highlightthickness=0,
-        )
-        self._vis_canvas.pack(fill="x", padx=12, pady=(4, 10))
+        # ── Mouth animation: draw open mouth ─────────────────────────
+        if mouth_open > 0.1:
+            mouth_y = int(cy + _AVATAR_SIZE * 0.22)
+            mouth_w = int(_AVATAR_SIZE * 0.08 + mouth_open * _AVATAR_SIZE * 0.04)
+            mouth_h = int(mouth_open * _AVATAR_SIZE * 0.06)
+            mouth_color = (60, 20, 30, int(200 * mouth_open))
+            draw.ellipse(
+                [cx - mouth_w, mouth_y - mouth_h,
+                 cx + mouth_w, mouth_y + mouth_h],
+                fill=mouth_color
+            )
 
-        self._draw_visualizer()
-        self._start_vis_animation()
-        self._start_avatar_animation()
+        # Composite onto dark background
+        bg = Image.new("RGBA", (_AVATAR_SIZE, _AVATAR_SIZE), (13, 17, 23, 255))
+        bg.paste(frame, (0, 0), frame)
+        final = bg.convert("RGB")
 
-    # ── Avatar ring drawing + animation ───────────────────────────────
-    def _draw_avatar_ring(self) -> None:
-        """Draw the avatar with a coloured glow ring."""
+        self._avatar_photo = ImageTk.PhotoImage(final)
+
+    def _draw_avatar_frame(self) -> None:
+        """Draw the avatar + glow ring on the canvas."""
         c = self._avatar_canvas
         c.delete("all")
-        ring_size = _AVATAR_SIZE + 16
-        cx, cy = ring_size // 2, ring_size // 2
+        canvas_size = _AVATAR_SIZE + 24
+        cx, cy = canvas_size // 2, canvas_size // 2
         r = _AVATAR_SIZE // 2
 
         # Outer glow ring
-        glow_r = r + 6
-        pulse = (math.sin(self._avatar_glow_phase) + 1) * 0.5  # 0–1
-        alpha_factor = 0.5 + pulse * 0.5
-
-        # Draw ring as arc segments for colour variation
-        color = self._avatar_ring_color
-        ring_width = 3
+        glow_r = r + 8
+        pulse = (math.sin(self._anim_phase) + 1) * 0.5
+        ring_w = 3 + int(pulse * 2)
         c.create_oval(
             cx - glow_r, cy - glow_r, cx + glow_r, cy + glow_r,
-            outline=color, width=ring_width,
+            outline=self._ring_color, width=ring_w,
         )
 
-        # Inner subtle ring
-        inner_r = r + 2
-        c.create_oval(
-            cx - inner_r, cy - inner_r, cx + inner_r, cy + inner_r,
-            outline=color, width=1,
-        )
-
-        # Avatar image or placeholder
+        # Avatar image
         if self._avatar_photo is not None:
             c.create_image(cx, cy, image=self._avatar_photo, anchor="center")
         else:
-            # Placeholder circle
-            c.create_oval(
-                cx - r, cy - r, cx + r, cy + r,
-                fill=_BG_SURFACE, outline=_BORDER, width=2,
-            )
-            c.create_text(
-                cx, cy, text="🎮", font=("", 36),
-                fill=_TEXT_PRIMARY,
-            )
+            c.create_oval(cx - r, cy - r, cx + r, cy + r,
+                fill=_BG_SURFACE, outline=_BORDER, width=2)
+            c.create_text(cx, cy, text="🎮", font=("", 48), fill=_TEXT_PRIMARY)
 
-    def _start_avatar_animation(self) -> None:
-        if self._avatar_job is not None:
-            self.after_cancel(self._avatar_job)
-        self._animate_avatar()
+    # ── Animation loop ────────────────────────────────────────────────
+    def _start_animation(self) -> None:
+        if self._anim_job is not None:
+            self.after_cancel(self._anim_job)
+        self._animate()
 
-    def _animate_avatar(self) -> None:
+    def _animate(self) -> None:
+        """Main animation tick — runs at ~20fps."""
         if self.shutdown_event.is_set():
             return
-        self._avatar_glow_phase += 0.12
 
-        # Animate mouth bars when speaking
-        if self._vis_mode == "speaking":
-            for i, bar in enumerate(self._mouth_bars):
-                h = random.randint(4, 18)
-                bar.configure(height=h, fg_color=_ACCENT_CYAN)
-        elif self._vis_mode == "thinking":
-            phase = self._avatar_glow_phase
-            for i, bar in enumerate(self._mouth_bars):
-                h = int(4 + 6 * (math.sin(phase + i * 0.5) + 1))
-                bar.configure(height=h, fg_color=_ACCENT_AMBER)
-        elif self._vis_mode == "listening":
-            for i, bar in enumerate(self._mouth_bars):
-                h = int(4 + 3 * (math.sin(self._avatar_glow_phase * 0.5 + i) + 1))
-                bar.configure(height=h, fg_color=_ACCENT_GREEN)
+        self._anim_phase += 0.12
+
+        # ── Blink logic ───────────────────────────────────────────────
+        self._blink_timer += 1
+        if self._blink_state:
+            # Blink lasts 3 frames
+            if self._blink_timer > 3:
+                self._blink_state = False
+                self._blink_timer = 0
         else:
-            for bar in self._mouth_bars:
-                bar.configure(height=4, fg_color=_TEXT_MUTED)
+            # Random blink every 3-6 seconds (60-120 frames at 20fps)
+            if self._blink_timer > random.randint(60, 120):
+                self._blink_state = True
+                self._blink_timer = 0
 
-        self._draw_avatar_ring()
-        self._avatar_job = self.after(1000 // 16, self._animate_avatar)
-
-    # ── Waveform animation ────────────────────────────────────────────
-    def _start_vis_animation(self) -> None:
-        if self._vis_job is not None:
-            self.after_cancel(self._vis_job)
-        self._animate_vis()
-
-    def _animate_vis(self) -> None:
-        if self.shutdown_event.is_set():
-            return
-        self._vis_phase += 0.15
-
+        # ── Mouth logic ───────────────────────────────────────────────
         if self._vis_mode == "speaking":
-            for i in range(_VIS_BARS):
-                wave = math.sin(self._vis_phase + i * 0.4) * 0.3
-                noise = random.uniform(-0.15, 0.15)
-                center = 1.0 - abs(i - _VIS_BARS / 2) / (_VIS_BARS / 2) * 0.4
-                self._vis_target_h[i] = max(0.1, (0.5 + wave + noise) * center)
+            # Mouth opens and closes with some randomness
+            target = 0.4 + random.uniform(0, 0.6)
+            self._mouth_open += (target - self._mouth_open) * 0.5
         elif self._vis_mode == "thinking":
-            for i in range(_VIS_BARS):
-                pulse = (math.sin(self._vis_phase * 2 + i * 0.3) + 1) * 0.25
-                self._vis_target_h[i] = pulse + 0.05
-        elif self._vis_mode == "listening":
-            for i in range(_VIS_BARS):
-                gentle = (math.sin(self._vis_phase * 0.8 + i * 0.5) + 1) * 0.1
-                self._vis_target_h[i] = gentle + 0.03
+            # Subtle mouth movement
+            self._mouth_open += (0.15 - self._mouth_open) * 0.3
         else:
-            for i in range(_VIS_BARS):
-                self._vis_target_h[i] = 0.02
+            # Close mouth
+            self._mouth_open += (0.0 - self._mouth_open) * 0.4
 
-        for i in range(_VIS_BARS):
-            self._vis_current_h[i] += (self._vis_target_h[i] - self._vis_current_h[i]) * 0.3
+        # Render new frame
+        if _HAS_PIL and self._avatar_pil is not None:
+            self._render_avatar(
+                mouth_open=self._mouth_open,
+                blink=self._blink_state,
+            )
 
-        self._draw_visualizer()
-        self._vis_job = self.after(1000 // _VIS_FPS, self._animate_vis)
-
-    def _draw_visualizer(self) -> None:
-        canvas = self._vis_canvas
-        canvas.delete("all")
-        w = canvas.winfo_width() or 400
-        h = _VIS_HEIGHT
-        bar_w = max(2, (w - _VIS_BARS * 2) // _VIS_BARS)
-        gap = 2
-        total = bar_w + gap
-        x_off = (w - total * _VIS_BARS) // 2
-
-        for i in range(_VIS_BARS):
-            bh = max(2, int(self._vis_current_h[i] * h))
-            x = x_off + i * total
-            yt = (h - bh) // 2
-            yb = yt + bh
-            color = _VIS_IDLE_COLOR if self._vis_mode == "idle" else _VIS_COLORS[i % len(_VIS_COLORS)]
-            canvas.create_rectangle(x, yt, x + bar_w, yb, fill=color, outline="")
-            if self._vis_mode != "idle" and bh > 4:
-                canvas.create_rectangle(x, yt, x + bar_w, yt + 2,
-                    fill=_VIS_COLORS[(i + 2) % len(_VIS_COLORS)], outline="")
+        self._draw_avatar_frame()
+        self._anim_job = self.after(50, self._animate)  # 20fps
 
     # ══════════════════════════════════════════════════════════════════
     #  LOG
@@ -384,8 +318,7 @@ class OverwatchGUI(ctk.CTk):
         hdr.pack(fill="x", padx=14, pady=(10, 0))
         ctk.CTkLabel(
             hdr, text="📋  Activity Log",
-            font=ctk.CTkFont(size=13, weight="bold"),
-            text_color=_TEXT_SECONDARY,
+            font=ctk.CTkFont(size=13, weight="bold"), text_color=_TEXT_SECONDARY,
         ).pack(side="left")
 
         self._log_box = ctk.CTkTextbox(
@@ -423,8 +356,7 @@ class OverwatchGUI(ctk.CTk):
         self._status_label.pack(side="left")
 
         ctk.CTkLabel(
-            inner, text="v2.2", font=ctk.CTkFont(size=11),
-            text_color=_TEXT_MUTED,
+            inner, text="v2.3", font=ctk.CTkFont(size=11), text_color=_TEXT_MUTED,
         ).pack(side="right")
 
     # ══════════════════════════════════════════════════════════════════
@@ -460,34 +392,33 @@ class OverwatchGUI(ctk.CTk):
 
     def _do_set_vis_mode(self, mode: str) -> None:
         self._vis_mode = mode
-        self._avatar_ring_color = _RING_COLORS.get(mode, _RING_COLORS["idle"])
-
-        status_map = {
+        self._ring_color = _RING_COLORS.get(mode, _RING_COLORS["idle"])
+        labels = {
             "idle": ("Offline", _TEXT_MUTED),
             "listening": ("🎧 Listening…", _ACCENT_GREEN),
             "speaking": ("🎙 Speaking…", _ACCENT_CYAN),
             "thinking": ("🧠 Thinking…", _ACCENT_AMBER),
         }
-        text, color = status_map.get(mode, ("Offline", _TEXT_MUTED))
-        self._avatar_status_label.configure(text=text, text_color=color)
+        text, color = labels.get(mode, ("Offline", _TEXT_MUTED))
+        self._avatar_status.configure(text=text, text_color=color)
 
     def _update_status(self, text: str) -> None:
         self._status_label.configure(text=text)
         lower = text.lower()
         if "listening" in lower:
-            self._set_dot_color(_ACCENT_GREEN, pulse=True)
+            self._set_dot_color(_ACCENT_GREEN, True)
             self._do_set_vis_mode("listening")
         elif "speaking" in lower:
-            self._set_dot_color(_ACCENT_CYAN, pulse=True)
+            self._set_dot_color(_ACCENT_CYAN, True)
             self._do_set_vis_mode("speaking")
         elif "thinking" in lower:
-            self._set_dot_color(_ACCENT_AMBER, pulse=True)
+            self._set_dot_color(_ACCENT_AMBER, True)
             self._do_set_vis_mode("thinking")
         elif "offline" in lower or "error" in lower:
-            self._set_dot_color(_TEXT_MUTED, pulse=False)
+            self._set_dot_color(_TEXT_MUTED, False)
             self._do_set_vis_mode("idle")
         else:
-            self._set_dot_color(_ACCENT_AMBER, pulse=False)
+            self._set_dot_color(_ACCENT_AMBER, False)
 
     def _set_dot_color(self, color: str, pulse: bool = False) -> None:
         self._status_color = color
@@ -537,19 +468,13 @@ class OverwatchGUI(ctk.CTk):
 
     def _on_closing(self) -> None:
         logger.info("Shutdown requested")
-        self.log("Shutting down …")
-        self._update_status("Shutting down…")
         if self._pulse_job:
             self.after_cancel(self._pulse_job)
-        if self._vis_job:
-            self.after_cancel(self._vis_job)
-        if self._avatar_job:
-            self.after_cancel(self._avatar_job)
+        if self._anim_job:
+            self.after_cancel(self._anim_job)
         self.shutdown_event.set()
         for t in self._threads:
             t.join(timeout=3.0)
-            if t.is_alive():
-                logger.warning("Thread %s did not stop", t.name)
         logger.info("Shutdown complete")
         self.destroy()
 

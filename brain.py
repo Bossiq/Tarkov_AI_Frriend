@@ -23,11 +23,12 @@ logger = logging.getLogger(__name__)
 
 # ── Constants ────────────────────────────────────────────────────────
 _DEFAULT_MODEL = "mistral"
-_DEFAULT_NUM_CTX = 2048         # Smaller = faster generation
-_DEFAULT_TEMPERATURE = 0.6      # Lower = more focused, faster
+_DEFAULT_NUM_CTX = 1024         # Minimal context = fastest generation
+_DEFAULT_NUM_PREDICT = 80       # Max output tokens (~2-3 sentences)
+_DEFAULT_TEMPERATURE = 0.6
 _DEFAULT_TOP_P = 0.85
 _DEFAULT_REPEAT_PENALTY = 1.15
-_MAX_MEMORY = 6   # keep last N user/assistant pairs (less = faster)
+_MAX_MEMORY = 4   # keep last N user/assistant pairs
 _MAX_RETRIES = 3
 _RETRY_BASE_DELAY = 1.0
 
@@ -98,9 +99,10 @@ class Brain:
 
     @property
     def _options(self) -> dict:
-        """Ollama generation options for natural, varied output."""
+        """Ollama generation options — tuned for speed."""
         return {
             "num_ctx": self._num_ctx,
+            "num_predict": _DEFAULT_NUM_PREDICT,
             "temperature": self._temperature,
             "top_p": self._top_p,
             "repeat_penalty": self._repeat_penalty,

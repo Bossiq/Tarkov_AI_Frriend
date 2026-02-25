@@ -239,6 +239,10 @@ class VoiceOutput:
                     continue
                 full_response.append(sentence)
                 speech_text = self._preprocess_for_speech(sentence)
+                # Guard: skip empty strings (Kokoro crashes on empty input)
+                if not speech_text or not speech_text.strip():
+                    logger.debug("Skipping empty speech text")
+                    continue
                 try:
                     with self._kokoro_lock:
                         samples, sr = self._kokoro.create(
@@ -251,7 +255,7 @@ class VoiceOutput:
                     audio_q.put((processed, sr))
                 except Exception:
                     logger.exception("TTS synthesis failed: %s", speech_text[:50])
-                    break
+                    continue  # Don't break — try next sentence
             audio_q.put(_SENTINEL)
 
         producer = threading.Thread(target=_producer, name="TTSSynth", daemon=True)

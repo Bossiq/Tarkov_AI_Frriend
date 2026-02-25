@@ -1,8 +1,10 @@
 """
-Voice Input — microphone capture with adaptive VAD + transcription.
+Voice Input — microphone capture with adaptive VAD + local transcription.
 
 Uses ambient noise calibration to resist background music/noise.
 Requires sustained speech before triggering to prevent false activations.
+Transcription via faster-whisper (CTranslate2-optimized Whisper) for
+high-accuracy, fully offline speech-to-text.
 """
 
 import logging
@@ -14,7 +16,6 @@ from typing import Optional
 import numpy as np
 import sounddevice as sd
 import soundfile as sf
-import speech_recognition as sr
 
 logger = logging.getLogger(__name__)
 
@@ -27,10 +28,12 @@ _MAX_RECORDING_SECONDS = 30       # safety cap
 _CALIBRATION_SECONDS = 1.0        # how long to sample ambient noise
 _NOISE_MULTIPLIER = 2.5           # threshold = ambient_rms × this
 _MIN_SPEECH_CHUNKS = 3            # require N consecutive loud chunks to start
+_DEFAULT_WHISPER_MODEL = "large-v3-turbo"
+_DEFAULT_COMPUTE_TYPE = "int8"    # fast on Apple Silicon, good accuracy
 
 
 class VoiceInput:
-    """Captures speech with adaptive noise-resistant VAD + transcription."""
+    """Captures speech with adaptive noise-resistant VAD + local transcription."""
 
     def __init__(
         self,
@@ -39,15 +42,53 @@ class VoiceInput:
         silence_duration: float = _SILENCE_DURATION,
         max_duration: float = _MAX_RECORDING_SECONDS,
         shutdown_event: Optional[threading.Event] = None,
+        gui_log=None,
     ) -> None:
         self.samplerate = samplerate
         self.channels = channels
         self.silence_duration = silence_duration
         self.max_duration = max_duration
         self._shutdown = shutdown_event or threading.Event()
-        self._recognizer = sr.Recognizer()
+        self._gui_log = gui_log
         self._threshold: Optional[float] = None
         self._chunk_size = int(self.samplerate * _CHUNK_SECONDS)
+
+        # Lazy-loaded Whisper model
+        self._whisper_model = None
+        self._whisper_lock = threading.Lock()
+
+    # ── Whisper model loading ─────────────────────────────────────────
+    def _get_whisper_model(self):
+        """Lazy-load the faster-whisper model (thread-safe)."""
+        if self._whisper_model is not None:
+            return self._whisper_model
+
+        with self._whisper_lock:
+            if self._whisper_model is not None:
+                return self._whisper_model
+
+            model_name = os.getenv("WHISPER_MODEL", _DEFAULT_WHISPER_MODEL)
+            compute_type = os.getenv("WHISPER_COMPUTE_TYPE", _DEFAULT_COMPUTE_TYPE)
+
+            if self._gui_log:
+                self._gui_log(f"🤖 Loading speech model ({model_name}) — first run may download …")
+            logger.info(
+                "Loading faster-whisper model '%s' (compute=%s) …",
+                model_name, compute_type,
+            )
+
+            from faster_whisper import WhisperModel
+
+            self._whisper_model = WhisperModel(
+                model_name,
+                device="cpu",
+                compute_type=compute_type,
+            )
+
+            if self._gui_log:
+                self._gui_log("🤖 Speech model loaded ✅")
+            logger.info("Whisper model loaded successfully")
+            return self._whisper_model
 
     # ── Adaptive noise calibration ────────────────────────────────────
     def calibrate(self, gui_log=None) -> float:
@@ -77,7 +118,7 @@ class VoiceInput:
             self._threshold = 0.03
             return self._threshold
 
-        ambient_rms = np.mean(samples) if samples else 0.005
+        ambient_rms = float(np.mean(samples)) if samples else 0.005
         # Floor to prevent near-zero thresholds in silent rooms
         self._threshold = max(ambient_rms * _NOISE_MULTIPLIER, 0.015)
         logger.info(
@@ -86,6 +127,12 @@ class VoiceInput:
         )
         if gui_log:
             gui_log(f"🔊 Calibrated (threshold: {self._threshold:.3f})")
+
+        # Pre-load Whisper model in background while user starts talking
+        threading.Thread(
+            target=self._get_whisper_model, name="WhisperLoad", daemon=True
+        ).start()
+
         return self._threshold
 
     # ── Main listening loop ───────────────────────────────────────────
@@ -169,22 +216,40 @@ class VoiceInput:
 
     # ── Transcription ─────────────────────────────────────────────────
     def transcribe(self, audio_path: str) -> Optional[str]:
-        """Transcribe a WAV file to text using Google Speech Recognition."""
+        """Transcribe a WAV file to text using faster-whisper (local).
+
+        Returns the transcribed text, or None if transcription fails.
+        """
+        start_time = time.monotonic()
         try:
-            with sr.AudioFile(audio_path) as source:
-                audio_data = self._recognizer.record(source)
+            model = self._get_whisper_model()
 
-            logger.info("Transcribing …")
-            text = self._recognizer.recognize_google(audio_data)
-            logger.info("Transcription: %s", text)
-            return text
+            segments, info = model.transcribe(
+                audio_path,
+                language="en",
+                beam_size=5,
+                vad_filter=True,              # filter out non-speech
+                vad_parameters=dict(
+                    min_silence_duration_ms=300,
+                    speech_pad_ms=200,
+                ),
+            )
 
-        except sr.UnknownValueError:
-            logger.warning("Could not understand the audio")
-            return None
-        except sr.RequestError as exc:
-            logger.error("Speech recognition error: %s", exc)
-            return None
+            # Collect segments into full text
+            text_parts = []
+            for segment in segments:
+                text_parts.append(segment.text.strip())
+
+            text = " ".join(text_parts).strip()
+
+            elapsed = time.monotonic() - start_time
+            logger.info(
+                "Transcription (%.1fs): %s",
+                elapsed, text[:100] if text else "(empty)",
+            )
+
+            return text if text else None
+
         except Exception:
             logger.exception("Transcription failed")
             return None

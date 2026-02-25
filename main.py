@@ -7,6 +7,10 @@ then runs the Tkinter main loop on the main thread.
 All background work is coordinated through a shared ``threading.Event``
 (``gui.shutdown_event``) so the app exits cleanly when the window is closed
 or a SIGTERM / SIGINT is received.
+
+IMPORTANT: No blocking I/O ever touches the Tkinter main thread.
+All heavy work (mic calibration, model loading, transcription, TTS)
+runs on daemon threads.
 """
 
 import asyncio
@@ -45,11 +49,28 @@ class SCAVESystem:
         self._shutdown = gui.shutdown_event
         self._gui.log("Initializing PMC Overwatch …")
 
-        # ── Components ────────────────────────────────────────────────
+        # ── Components (lightweight init only) ─────────────────────────
         self._vc = VideoCapture()
-        self._vi = VoiceInput(shutdown_event=self._shutdown)
+        self._vi = VoiceInput(shutdown_event=self._shutdown, gui_log=self._gui.log)
         self._vo = VoiceOutput(gui_callback=self._gui.log)
 
+        self._brain: Optional[Brain] = None
+        self._twitch_bot: Optional[TwitchBot] = None
+        self._running = False
+
+        self._latest_frame_path = "latest_frame.jpg"
+
+        # Hook up GUI toggle
+        self._gui.set_toggle_callback(self._on_toggle)
+
+        # Initialize brain in background so GUI appears instantly
+        threading.Thread(
+            target=self._init_brain_async, name="BrainInit", daemon=True
+        ).start()
+
+    # ── Async brain init ──────────────────────────────────────────────
+    def _init_brain_async(self) -> None:
+        """Load the AI brain on a background thread (avoids GUI freeze)."""
         try:
             self._brain = Brain()
             self._gui.log(f"🧠 Brain online (Ollama: {self._brain._model})")
@@ -58,14 +79,7 @@ class SCAVESystem:
             logger.error("Brain init failed: %s", exc)
             self._brain = None
 
-        self._twitch_bot: Optional[TwitchBot] = None
-        self._running = False  # controlled by toggle button
-
-        self._latest_frame_path = "latest_frame.jpg"
-
-        # Hook up GUI toggle
-        self._gui.set_toggle_callback(self._on_toggle)
-        self._gui.log("System initialised. Click Start Overwatch to begin.")
+        self._gui.log("System ready. Click ▶ Start Overwatch to begin.")
 
     # ── Twitch ────────────────────────────────────────────────────────
     def setup_twitch(self) -> bool:
@@ -95,7 +109,11 @@ class SCAVESystem:
 
     # ── Toggle ────────────────────────────────────────────────────────
     def _on_toggle(self, is_running: bool) -> None:
-        """Called by the GUI when the user clicks Start / Stop."""
+        """Called by the GUI when the user clicks Start / Stop.
+
+        CRITICAL: This runs on the Tkinter main thread, so it must
+        NEVER block.  All heavy work goes to background threads.
+        """
         self._running = is_running
         if is_running:
             if self._brain is None:
@@ -103,9 +121,13 @@ class SCAVESystem:
                     "⚠ Cannot start — Ollama is not running. "
                     "Run: brew services start ollama"
                 )
+                # Reset toggle back to stopped state
+                self._gui.force_toggle_off()
+                self._running = False
                 return
-            # Calibrate mic to ambient noise on first start
-            self._vi.calibrate(gui_log=self._gui.log)
+
+            # Start the listening thread — calibration happens INSIDE it,
+            # NOT on the main thread (prevents UI freeze)
             t = threading.Thread(
                 target=self._listening_thread, name="ListenThread", daemon=True
             )
@@ -114,18 +136,27 @@ class SCAVESystem:
 
     # ── Listening thread ──────────────────────────────────────────────
     def _listening_thread(self) -> None:
-        """Continuous VAD listening loop running on a background thread."""
-        self._gui.log("🎧 Hands-free listening active.")
+        """Continuous VAD listening loop running on a background thread.
+
+        Calibration happens HERE (background thread), NOT on main thread.
+        """
+        # Calibrate mic on the background thread — this blocks for ~1s
+        # but that's fine because we're NOT on the Tkinter main thread
+        self._gui.log("🔊 Calibrating microphone …")
+        self._gui.set_status("Calibrating…")
+        self._vi.calibrate(gui_log=self._gui.log)
+
+        self._gui.log("🎧 Listening active — speak to interact.")
+        self._gui.set_status("Listening…")
         logger.info("Listening thread started")
 
         while self._running and not self._shutdown.is_set():
             try:
-                self._gui.set_status("Listening…")
+                self._gui.set_status("🎧 Listening…")
                 self._process_interaction(use_audio=True)
             except Exception:
                 logger.exception("Error in listening loop")
                 self._gui.log("⚠ Listening error — retrying …")
-                # Back-off before retrying
                 if self._shutdown.wait(timeout=2.0):
                     break
             # Small pause between listen cycles
@@ -133,6 +164,7 @@ class SCAVESystem:
                 break
 
         self._gui.log("🎧 Listening stopped.")
+        self._gui.set_status("Offline")
         logger.info("Listening thread stopped")
 
     # ── Twitch message handler ────────────────────────────────────────
@@ -157,7 +189,7 @@ class SCAVESystem:
         # ── Audio capture + transcription ─────────────────────────────
         if use_audio:
             try:
-                self._gui.set_status("Listening…")
+                self._gui.set_status("🎧 Listening…")
                 audio_path = self._vi.listen(output_filename="current_request.wav")
                 if not audio_path:
                     return
@@ -189,12 +221,15 @@ class SCAVESystem:
             return
 
         # ── Stream response sentence-by-sentence ──────────────────────
-        self._gui.set_status("Thinking…")
+        self._gui.set_status("🧠 Thinking…")
         self._gui.log("🧠 Generating response …")
 
-        self._gui.set_status("Speaking…")
+        response_start = time.monotonic()
+        self._gui.set_status("🎙 Speaking…")
         self._vo.speak_streamed(self._brain.stream_sentences(text_prompt))
-        self._gui.set_status("Listening…" if self._running else "Offline")
+        elapsed = time.monotonic() - response_start
+        logger.info("Response cycle completed in %.1fs", elapsed)
+        self._gui.set_status("🎧 Listening…" if self._running else "Offline")
 
 
 # ── Entry point ──────────────────────────────────────────────────────

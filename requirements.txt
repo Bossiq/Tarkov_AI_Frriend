@@ -12,3 +12,4 @@ ollama==0.6.1
 kokoro-onnx==0.5.0
 python-dotenv==1.2.1
 customtkinter==5.2.2
+Pillow==12.1.1

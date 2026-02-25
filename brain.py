@@ -46,6 +46,7 @@ _SYSTEM_INSTRUCTION = (
     "- NEVER use markdown, bullet points, lists, asterisks, or emoji.\n"
     "- NEVER use forced military jargon like 'copy that', 'roger', 'affirmative'.\n"
     "- Remember what they've said earlier in the conversation.\n"
+    "- You are female. Respond in first person accordingly.\n"
 )
 
 # Regex to split accumulated text into complete sentences

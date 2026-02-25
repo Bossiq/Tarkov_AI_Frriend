@@ -33,8 +33,8 @@ _ONNX_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model
 _VOICES_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin"
 
 # ── Defaults ─────────────────────────────────────────────────────────
-_DEFAULT_VOICE = "am_michael"   # Male voice — natural, clear
-_DEFAULT_SPEED = 1.0
+_DEFAULT_VOICE = "af_heart"     # Female voice — warm, natural
+_DEFAULT_SPEED = 1.1
 _DEFAULT_LANG = "en-us"
 _SAY_TIMEOUT_S = 30
 _FADE_MS = 3                    # Very gentle 3ms fade (just anti-click)

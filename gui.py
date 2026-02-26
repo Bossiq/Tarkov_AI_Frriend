@@ -1,15 +1,14 @@
 """
-PMC Overwatch GUI — Premium anime avatar with live animated overlays.
+PMC Overwatch GUI — Premium anime avatar with full cross-fade animation.
 
-Hybrid rendering approach:
-  • High-quality anime girl sprite as base image
-  • PIL-drawn animated mouth overlay (tracks audio amplitude)
-  • PIL-drawn eyelid curtains (smooth multi-stage blinks)
-  • Head sway, breathing bob, and scale via PIL transforms
-  • Canvas glow rings and voice bars per mode
-
-This gives the visual quality of hand-crafted art PLUS truly live
-animation — the best of both worlds.
+Rendering approach:
+  • Full-image cross-fade between expression sprites (not region compositing)
+  • Talk sprites blend over base at amplitude-driven opacity
+  • Blink sprite fades in/out for smooth natural blinks
+  • Smile/think sprites blend for emotion expressions
+  • Head sway, breathing bob via PIL transforms
+  • Canvas glow rings, speaking ripples, voice bars
+  • Ambient floating particles for alive feel
 """
 
 import logging
@@ -23,7 +22,7 @@ from datetime import datetime
 from typing import Callable, Optional
 
 import customtkinter as ctk
-from PIL import Image, ImageDraw, ImageFilter, ImageTk
+from PIL import Image, ImageTk
 
 logger = logging.getLogger(__name__)
 
@@ -64,22 +63,18 @@ def _lerp(a: float, b: float, t: float) -> float:
     return a + (b - a) * t
 
 
-def _ease(t: float) -> float:
-    return t * t * (3.0 - 2.0 * t)
-
-
 # ═════════════════════════════════════════════════════════════════════
-# Hybrid Anime Engine — sprite base + animated overlays
+# Cross-Fade Engine — full image blending between expressions
 # ═════════════════════════════════════════════════════════════════════
-class _AnimeEngine:
-    """High quality anime face with live animated features.
+class _CrossFadeEngine:
+    """Blends full expression sprites for smooth animated transitions.
 
-    Loads the pre-rendered anime sprite as base, then draws animated
-    overlays for mouth (amplitude-driven) and eyes (blink curtains)
-    on each frame using PIL.
+    Each frame is composed by layering sprites at varying opacities:
+      base (neutral) → talk overlay → emotion overlay → blink overlay
+    This creates dramatically visible expression changes.
     """
 
-    _SPRITES = {
+    _SPRITE_FILES = {
         "neutral": "neutral.png",
         "talk_a": "talk_a.png",
         "talk_b": "talk_b.png",
@@ -91,28 +86,22 @@ class _AnimeEngine:
     def __init__(self, size: int) -> None:
         self._size = size
         self._sprites: dict[str, Image.Image] = {}
-        self._load_sprites()
+        self._load()
 
-        # Animation state
-        self.amplitude = 0.0     # 0-1 mouth opening
-        self.eyelid = 0.0        # 0=open, 1=closed
-        self.smile = 0.0         # 0=neutral, 1=smile
-        self.think_blend = 0.0   # 0=neutral, 1=thinking
-        self.head_x = 0.0        # px offset
-        self.head_y = 0.0        # px offset
-        self.breath_scale = 1.0  # scale factor
+        # Blend weights (0.0 = invisible, 1.0 = fully visible)
+        self.talk_a_blend = 0.0
+        self.talk_b_blend = 0.0
+        self.blink_blend = 0.0
+        self.smile_blend = 0.0
+        self.think_blend = 0.0
 
-        # Mouth region (fraction of image, tuned for the anime sprites)
-        self._mouth_top = 0.60
-        self._mouth_bot = 0.78
-        self._mouth_cx = 0.50   # center x fraction
+        # Motion
+        self.head_x = 0.0
+        self.head_y = 0.0
+        self.breath_scale = 1.0
 
-        # Eye region (fraction of image)
-        self._eye_top = 0.28
-        self._eye_bot = 0.46
-
-    def _load_sprites(self) -> None:
-        for name, fn in self._SPRITES.items():
+    def _load(self) -> None:
+        for name, fn in self._SPRITE_FILES.items():
             path = os.path.join(_ASSET_DIR, fn)
             if os.path.exists(path):
                 try:
@@ -120,125 +109,88 @@ class _AnimeEngine:
                     img = img.resize((self._size, self._size), Image.LANCZOS)
                     self._sprites[name] = img
                 except Exception:
-                    logger.warning("Failed to load sprite: %s", path)
+                    logger.warning("Failed to load: %s", path)
 
-        # Fallbacks
         if "neutral" not in self._sprites:
-            if self._sprites:
-                self._sprites["neutral"] = next(iter(self._sprites.values()))
-            else:
-                # Create placeholder
-                self._sprites["neutral"] = Image.new("RGBA", (self._size, self._size), (20, 20, 30, 255))
+            self._sprites["neutral"] = Image.new("RGBA", (self._size, self._size), (20, 20, 30, 255))
 
-        for fallback in ("smile", "think", "blink", "talk_a", "talk_b"):
-            if fallback not in self._sprites:
-                self._sprites[fallback] = self._sprites["neutral"]
+        for fb in self._SPRITE_FILES:
+            if fb not in self._sprites:
+                self._sprites[fb] = self._sprites["neutral"]
 
     def render(self) -> Image.Image:
-        """Render one frame with animated overlays."""
         s = self._size
+        base = self._sprites["neutral"].copy()
 
-        # ── Select base sprite based on state ─────────────────────────
-        if self.think_blend > 0.5:
-            base = self._sprites["think"].copy()
-        elif self.smile > 0.5:
-            base = self._sprites["smile"].copy()
-        else:
-            base = self._sprites["neutral"].copy()
+        # Layer 1: Talk expression (amplitude-driven)
+        if self.talk_a_blend > 0.02:
+            t = min(1.0, self.talk_a_blend)
+            talk_a = self._sprites["talk_a"]
+            base = Image.blend(base, talk_a, t)
 
-        # ── Mouth: blend talk sprites based on amplitude ──────────────
-        if self.amplitude > 0.08:
-            if self.amplitude < 0.35:
-                talk = self._sprites["talk_a"]
-                blend_t = min(1.0, self.amplitude / 0.35)
-            else:
-                talk = self._sprites["talk_b"]
-                blend_t = min(1.0, (self.amplitude - 0.35) / 0.5 + 0.5)
+        if self.talk_b_blend > 0.02:
+            t = min(1.0, self.talk_b_blend)
+            talk_b = self._sprites["talk_b"]
+            base = Image.blend(base, talk_b, t)
 
-            # Mouth region mask — fade in the talk sprite's mouth
-            mask = Image.new("L", (s, s), 0)
-            draw = ImageDraw.Draw(mask)
-            mt = int(self._mouth_top * s)
-            mb = int(self._mouth_bot * s)
-            mcx = int(self._mouth_cx * s)
-            mw = int(s * 0.32)
-            # Elliptical mask for mouth region
-            draw.ellipse(
-                [mcx - mw, mt, mcx + mw, mb],
-                fill=int(255 * _ease(blend_t))
-            )
-            # Soften edges
-            mask = mask.filter(ImageFilter.GaussianBlur(radius=6))
-            base.paste(talk, mask=mask)
+        # Layer 2: Emotion (smile or think)
+        if self.smile_blend > 0.02:
+            t = min(1.0, self.smile_blend)
+            base = Image.blend(base, self._sprites["smile"], t)
 
-        # ── Eyes: eyelid curtain for blinks ───────────────────────────
-        if self.eyelid > 0.05:
-            # Sample skin color from the forehead area for natural eyelid
-            try:
-                skin_sample = base.getpixel((s // 2, int(s * 0.22)))
-                skin_color = skin_sample[:3] if len(skin_sample) >= 3 else (232, 196, 160)
-            except Exception:
-                skin_color = (232, 196, 160)
+        if self.think_blend > 0.02:
+            t = min(1.0, self.think_blend)
+            base = Image.blend(base, self._sprites["think"], t)
 
-            overlay = Image.new("RGBA", (s, s), (0, 0, 0, 0))
-            ov_draw = ImageDraw.Draw(overlay)
+        # Layer 3: Blink (eyes closing)
+        if self.blink_blend > 0.02:
+            t = min(1.0, self.blink_blend)
+            base = Image.blend(base, self._sprites["blink"], t)
 
-            et = int(self._eye_top * s)
-            eb = int(self._eye_bot * s)
-            eye_h = eb - et
-
-            # Eyelid drops from top of eye region
-            lid_drop = int(self.eyelid * eye_h * 1.1)
-            if lid_drop > 2:
-                lid_alpha = min(255, int(self.eyelid * 280))
-                r, g, b = skin_color
-
-                # Left eye region
-                lex = int(s * 0.28)
-                rew = int(s * 0.18)
-                ov_draw.rounded_rectangle(
-                    [lex - rew, et - 4, lex + rew, et + lid_drop],
-                    radius=8,
-                    fill=(r, g, b, lid_alpha)
-                )
-
-                # Right eye region
-                rex = int(s * 0.72)
-                ov_draw.rounded_rectangle(
-                    [rex - rew, et - 4, rex + rew, et + lid_drop],
-                    radius=8,
-                    fill=(r, g, b, lid_alpha)
-                )
-
-                # Soften for natural look
-                overlay = overlay.filter(ImageFilter.GaussianBlur(radius=3))
-                base = Image.alpha_composite(base, overlay)
-
-        # ── Head motion + breathing ───────────────────────────────────
+        # Layer 4: Motion (head sway + breathing)
         w, h = base.size
         nw = int(w * self.breath_scale)
         nh = int(h * self.breath_scale)
-        if nw > 0 and nh > 0 and (nw != w or nh != h):
+        dx = int(self.head_x)
+        dy = int(self.head_y)
+
+        if nw != w or nh != h:
             base = base.resize((nw, nh), Image.LANCZOS)
-            cx = (nw - w) // 2 - int(self.head_x)
-            cy = (nh - h) // 2 - int(self.head_y)
+            cx = (nw - w) // 2 - dx
+            cy = (nh - h) // 2 - dy
             base = base.crop((cx, cy, cx + w, cy + h))
-        elif abs(self.head_x) > 0.5 or abs(self.head_y) > 0.5:
-            # Apply head offset via crop
+        elif abs(dx) > 0 or abs(dy) > 0:
             shifted = Image.new("RGBA", (w, h), (10, 14, 20, 255))
-            ox = int(self.head_x)
-            oy = int(self.head_y)
-            shifted.paste(base, (ox, oy))
+            shifted.paste(base, (dx, dy))
             base = shifted
 
         return base
 
 
 # ═════════════════════════════════════════════════════════════════════
+# Floating Particles — ambient alive effect
+# ═════════════════════════════════════════════════════════════════════
+class _Particle:
+    __slots__ = ("x", "y", "vx", "vy", "r", "alpha", "life", "max_life")
+
+    def __init__(self, cx: int, cy: int) -> None:
+        angle = random.uniform(0, 2 * math.pi)
+        dist = random.uniform(80, 180)
+        self.x = cx + math.cos(angle) * dist
+        self.y = cy + math.sin(angle) * dist
+        self.vx = random.uniform(-0.3, 0.3)
+        self.vy = random.uniform(-0.5, -0.1)
+        self.r = random.uniform(1.0, 2.5)
+        self.alpha = 0.0
+        self.life = 0.0
+        self.max_life = random.uniform(3.0, 6.0)
+
+
+# ═════════════════════════════════════════════════════════════════════
 # Main GUI
 # ═════════════════════════════════════════════════════════════════════
 class OverwatchGUI(ctk.CTk):
-    """PMC Overwatch — premium anime avatar with live animation."""
+    """PMC Overwatch — premium anime avatar with full cross-fade animation."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -259,9 +211,8 @@ class OverwatchGUI(ctk.CTk):
         self._phase = 0.0
         self._photo: Optional[ImageTk.PhotoImage] = None
 
-        # Compute avatar size
         avatar_size = min(_CANVAS_W - 40, _CANVAS_H - 60)
-        self._engine = _AnimeEngine(avatar_size)
+        self._engine = _CrossFadeEngine(avatar_size)
         self._avatar_x = (_CANVAS_W - avatar_size) // 2
         self._avatar_y = 6
 
@@ -284,7 +235,7 @@ class OverwatchGUI(ctk.CTk):
         # Breathing
         self._breath_phase = 0.0
 
-        # Speaking — amplitude driven
+        # Speaking
         self._amplitude = 0.0
         self._amplitude_target = 0.0
 
@@ -292,7 +243,11 @@ class OverwatchGUI(ctk.CTk):
         self._emotion = "neutral"
         self._emotion_timer = 0.0
 
-        # Input mode display
+        # Particles
+        self._particles: list[_Particle] = []
+        self._particle_timer = 0.0
+
+        # Input mode
         self._input_mode = os.getenv("INPUT_MODE", "auto").lower()
 
         # Voice bars
@@ -305,7 +260,7 @@ class OverwatchGUI(ctk.CTk):
         self._build_footer()
         self._start_anim()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
-        logger.info("Premium anime avatar GUI initialized")
+        logger.info("Premium cross-fade GUI initialized")
 
     # ══ HEADER ════════════════════════════════════════════════════════
     def _build_header(self) -> None:
@@ -348,7 +303,19 @@ class OverwatchGUI(ctk.CTk):
         cx = _CANVAS_W // 2
         cy = _CANVAS_H // 2 - 10
 
-        # Glow ring
+        # ── Particles (behind avatar) ─────────────────────────────────
+        for p in self._particles:
+            if p.alpha > 0.02:
+                a = int(min(1.0, p.alpha) * 80)
+                r = max(10, int(glow_rgb[0] * a / 255))
+                g = max(14, int(glow_rgb[1] * a / 255))
+                b = max(20, int(glow_rgb[2] * a / 255))
+                pc = f"#{r:02x}{g:02x}{b:02x}"
+                pr = p.r
+                cv.create_oval(p.x - pr, p.y - pr, p.x + pr, p.y + pr,
+                               fill=pc, outline="")
+
+        # ── Glow ring ─────────────────────────────────────────────────
         pulse = (math.sin(self._phase * 0.7) + 1) * 0.5
         if self._mode != "idle":
             ar = self._engine._size // 2
@@ -361,7 +328,6 @@ class OverwatchGUI(ctk.CTk):
                 c = f"#{rc:02x}{gc:02x}{bc:02x}"
                 cv.create_oval(cx - r, cy - r, cx + r, cy + r, outline=c, width=2)
 
-            # Speaking ripples
             if self._mode == "speaking":
                 for wi in range(3):
                     wp = self._phase * 2.0 + wi * 2.0
@@ -375,14 +341,14 @@ class OverwatchGUI(ctk.CTk):
                         cv.create_oval(cx - wr, cy - wr, cx + wr, cy + wr,
                                        outline=wc, width=1)
 
-        # Avatar rendering
+        # ── Avatar ────────────────────────────────────────────────────
         frame = self._engine.render()
         if frame is not None:
             self._photo = ImageTk.PhotoImage(frame)
             cv.create_image(self._avatar_x, self._avatar_y,
                             image=self._photo, anchor="nw")
 
-        # Voice bars
+        # ── Voice bars ────────────────────────────────────────────────
         total = _N_BARS * _BAR_W + (_N_BARS - 1) * _BAR_GAP
         bx = _CANVAS_W // 2 - total // 2
         by = _CANVAS_H - 22
@@ -395,6 +361,7 @@ class OverwatchGUI(ctk.CTk):
     # ══ ANIMATION ════════════════════════════════════════════════════
     def _update_state(self, dt: float) -> None:
         mode = self._mode
+        eng = self._engine
 
         # ── Multi-stage blink ─────────────────────────────────────────
         self._blink_timer += dt
@@ -404,23 +371,23 @@ class OverwatchGUI(ctk.CTk):
                 self._blink_dur = 0.0
                 self._double_blink = random.random() < 0.15
                 self._double_blink_count = 0
-        elif self._blink_stage == 1:  # Half close
+        elif self._blink_stage == 1:  # Closing
             self._blink_dur += dt
-            self._engine.eyelid = _lerp(self._engine.eyelid, 0.55, 0.45)
+            eng.blink_blend = _lerp(eng.blink_blend, 0.6, 0.45)
             if self._blink_dur >= 0.05:
                 self._blink_stage = 2
                 self._blink_dur = 0.0
-        elif self._blink_stage == 2:  # Full close
+        elif self._blink_stage == 2:  # Closed
             self._blink_dur += dt
-            self._engine.eyelid = _lerp(self._engine.eyelid, 1.0, 0.55)
-            if self._blink_dur >= 0.07:
+            eng.blink_blend = _lerp(eng.blink_blend, 1.0, 0.55)
+            if self._blink_dur >= 0.08:
                 self._blink_stage = 3
                 self._blink_dur = 0.0
         elif self._blink_stage == 3:  # Opening
             self._blink_dur += dt
-            self._engine.eyelid = _lerp(self._engine.eyelid, 0.0, 0.35)
-            if self._blink_dur >= 0.06:
-                self._engine.eyelid = 0.0
+            eng.blink_blend = _lerp(eng.blink_blend, 0.0, 0.35)
+            if self._blink_dur >= 0.07:
+                eng.blink_blend = 0.0
                 if self._double_blink and self._double_blink_count == 0:
                     self._double_blink_count = 1
                     self._blink_stage = 0
@@ -444,40 +411,67 @@ class OverwatchGUI(ctk.CTk):
         self._breath_phase += dt * 1.1
         breath_y = math.sin(self._breath_phase) * 3.5
         breath_scale = 1.0 + math.sin(self._breath_phase * 0.5) * 0.012
+        eng.head_x = self._head_x
+        eng.head_y = self._head_y + breath_y
+        eng.breath_scale = breath_scale
 
-        self._engine.head_x = self._head_x
-        self._engine.head_y = self._head_y + breath_y
-        self._engine.breath_scale = breath_scale
-
-        # ── Mode-specific ────────────────────────────────────────────
+        # ── Mode → blend weights ─────────────────────────────────────
         if mode == "speaking":
             self._amplitude += (self._amplitude_target - self._amplitude) * 0.4
-            self._engine.amplitude = self._amplitude
-            self._engine.smile = _lerp(self._engine.smile, 0.15, 0.04)
-            self._engine.think_blend = _lerp(self._engine.think_blend, 0.0, 0.1)
+            amp = self._amplitude
+            # Talk_a for quiet speech, talk_b for loud
+            if amp < 0.35:
+                eng.talk_a_blend = _lerp(eng.talk_a_blend, amp * 2.5, 0.3)
+                eng.talk_b_blend = _lerp(eng.talk_b_blend, 0.0, 0.2)
+            else:
+                eng.talk_a_blend = _lerp(eng.talk_a_blend, 0.0, 0.2)
+                eng.talk_b_blend = _lerp(eng.talk_b_blend, min(1.0, amp * 1.5), 0.3)
+            eng.smile_blend = _lerp(eng.smile_blend, 0.0, 0.08)
+            eng.think_blend = _lerp(eng.think_blend, 0.0, 0.08)
 
         elif mode == "thinking":
-            self._engine.amplitude = _lerp(self._engine.amplitude, 0.0, 0.1)
-            self._engine.think_blend = _lerp(self._engine.think_blend, 1.0, 0.06)
-            self._engine.smile = _lerp(self._engine.smile, 0.0, 0.05)
+            eng.talk_a_blend = _lerp(eng.talk_a_blend, 0.0, 0.1)
+            eng.talk_b_blend = _lerp(eng.talk_b_blend, 0.0, 0.1)
+            eng.smile_blend = _lerp(eng.smile_blend, 0.0, 0.08)
+            eng.think_blend = _lerp(eng.think_blend, 0.85, 0.06)
 
         elif mode == "listening":
-            self._engine.amplitude = _lerp(self._engine.amplitude, 0.0, 0.1)
-            self._engine.smile = _lerp(self._engine.smile, 0.2, 0.03)
-            self._engine.think_blend = _lerp(self._engine.think_blend, 0.0, 0.1)
+            eng.talk_a_blend = _lerp(eng.talk_a_blend, 0.0, 0.1)
+            eng.talk_b_blend = _lerp(eng.talk_b_blend, 0.0, 0.1)
+            eng.smile_blend = _lerp(eng.smile_blend, 0.25, 0.04)
+            eng.think_blend = _lerp(eng.think_blend, 0.0, 0.08)
 
         else:  # idle
-            self._engine.amplitude = _lerp(self._engine.amplitude, 0.0, 0.08)
-            self._engine.smile = _lerp(self._engine.smile, 0.05, 0.02)
-            self._engine.think_blend = _lerp(self._engine.think_blend, 0.0, 0.05)
+            eng.talk_a_blend = _lerp(eng.talk_a_blend, 0.0, 0.08)
+            eng.talk_b_blend = _lerp(eng.talk_b_blend, 0.0, 0.08)
+            eng.smile_blend = _lerp(eng.smile_blend, 0.0, 0.04)
+            eng.think_blend = _lerp(eng.think_blend, 0.0, 0.04)
 
-        # ── Emotion ──────────────────────────────────────────────────
+        # ── Emotion overlay ──────────────────────────────────────────
         if self._emotion == "happy":
-            self._engine.smile = _lerp(self._engine.smile, 0.9, 0.06)
+            eng.smile_blend = _lerp(eng.smile_blend, 0.9, 0.06)
             self._emotion_timer += dt
             if self._emotion_timer > 3.0:
                 self._emotion = "neutral"
                 self._emotion_timer = 0.0
+
+        # ── Particles ────────────────────────────────────────────────
+        self._particle_timer += dt
+        if self._particle_timer > 0.3 and mode != "idle" and len(self._particles) < 15:
+            self._particle_timer = 0.0
+            self._particles.append(_Particle(_CANVAS_W // 2, _CANVAS_H // 2))
+
+        alive = []
+        for p in self._particles:
+            p.life += dt
+            p.x += p.vx
+            p.y += p.vy
+            fade_in = min(1.0, p.life / 0.5)
+            fade_out = max(0.0, 1.0 - (p.life - p.max_life + 1.0))
+            p.alpha = fade_in * fade_out
+            if p.life < p.max_life:
+                alive.append(p)
+        self._particles = alive
 
         # ── Voice bars ───────────────────────────────────────────────
         for i in range(_N_BARS):
@@ -549,7 +543,7 @@ class OverwatchGUI(ctk.CTk):
         mode_text = mode_labels.get(self._input_mode, "Auto")
         ctk.CTkLabel(inner, text=f"\U0001f3a4 {mode_text}", font=ctk.CTkFont(size=11),
                      text_color=_TEXT2).pack(side="right", padx=(0, 12))
-        ctk.CTkLabel(inner, text="v0.18.0", font=ctk.CTkFont(size=11),
+        ctk.CTkLabel(inner, text="v0.19.0", font=ctk.CTkFont(size=11),
                      text_color=_MUTED).pack(side="right")
 
     # ══ PUBLIC API ════════════════════════════════════════════════════
@@ -567,10 +561,8 @@ class OverwatchGUI(ctk.CTk):
     def set_vis_mode(self, mode: str) -> None:
         self.after(0, self._set_mode, mode)
     def set_amplitude(self, amp: float) -> None:
-        """Set current audio amplitude for lip sync (0.0-1.0)."""
         self._amplitude_target = amp
     def set_emotion(self, emotion: str) -> None:
-        """Set avatar emotion: 'neutral', 'happy', 'curious'."""
         self.after(0, self._do_emotion, emotion)
 
     # ══ INTERNAL ═════════════════════════════════════════════════════
@@ -669,4 +661,4 @@ if __name__ == "__main__":
         app.after(0, app._on_close)
     threading.Thread(target=_demo, daemon=True).start()
     app.mainloop()
-    print("PREMIUM ANIME DEMO PASSED")
+    print("CROSS-FADE DEMO PASSED")

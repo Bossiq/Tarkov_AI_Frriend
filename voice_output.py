@@ -42,16 +42,18 @@ _VOICES_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/mod
 
 # ── edge-tts Voice Mapping ───────────────────────────────────────────
 _EDGE_VOICES = {
-    "en": "en-US-AriaNeural",
-    "ru": "ru-RU-DariyaNeural",
-    "ro": "ro-RO-AlinaNeural",
+    "en": "en-US-ChristopherNeural",      # warm male — PMC tone
+    "ru": "ru-RU-DmitryNeural",            # natural male Russian
+    "ro": "ro-RO-EmilNeural",              # natural male Romanian
+    "de": "de-DE-ConradNeural",            # German fallback
+    "fr": "fr-FR-HenriNeural",             # French fallback
 }
 
 # ── Defaults ─────────────────────────────────────────────────────────
 _DEFAULT_VOICE = "af_heart"
 _DEFAULT_SPEED = 1.1
 _DEFAULT_LANG = "en-us"
-_DEFAULT_EDGE_RATE = "+0%"
+_DEFAULT_EDGE_RATE = "-5%"
 _SAY_TIMEOUT_S = 30
 _AMPLITUDE_CHUNK_MS = 20  # RMS calculation every 20ms
 
@@ -109,11 +111,29 @@ def _number_to_words(n: int) -> str:
     return str(n)
 
 
+# ── Romanian common words (for text without diacritics) ──────────────
+_ROMANIAN_WORDS = re.compile(
+    r'\b(este|sunt|pentru|care|acest|acesta|aceasta|unde|'
+    r'cum|bine|salut|mulțumesc|multumesc|da|nu|și|si|'
+    r'sau|mai|foarte|aici|acolo|trebuie|poate|'
+    r'merge|vine|face|spune|vrea|stiu|stii)\b',
+    re.IGNORECASE
+)
+
+
 def _detect_language(text: str) -> str:
-    """Detect language from text content. Returns 'ru', 'ro', or 'en'."""
+    """Detect language from text content. Returns 'ru', 'ro', or 'en'.
+
+    Uses character patterns for Cyrillic, diacritics for Romanian,
+    and common Romanian words as fallback for text without diacritics.
+    """
     if _CYRILLIC.search(text):
         return "ru"
     if _ROMANIAN_CHARS.search(text):
+        return "ro"
+    # Check for common Romanian words (text without diacritics)
+    matches = _ROMANIAN_WORDS.findall(text)
+    if len(matches) >= 2:  # at least 2 Romanian words to be confident
         return "ro"
     return "en"
 

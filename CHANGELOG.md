@@ -2,6 +2,25 @@
 
 All notable changes to PMC Overwatch are documented here.
 
+## [0.19.0] — 2026-02-26
+
+### Added
+- **Full cross-fade animation**: entire expression sprites blend (not region compositing)
+- **New high-quality sprites**: 6 dramatically different expression images (neutral/talk_a/talk_b/blink/smile/think)
+- **Ambient particles**: floating glow particles around avatar for alive feel
+- **Romanian word detection**: detects Romanian without diacritics using common word patterns
+
+### Changed
+- English voice: AriaNeural → **ChristopherNeural** (warm male PMC tone)
+- Russian voice: DariyaNeural → **DmitryNeural** (natural male)
+- Romanian voice: AlinaNeural → **EmilNeural** (natural male)
+- Speech rate: +0% → **-5%** (slightly slower, more natural)
+- Added German and French voice fallbacks
+
+### Fixed
+- Language detection: Romanian text without diacritics now correctly detected
+- Per-sentence voice selection prevents wrong-accent reading
+
 ## [0.18.0] — 2026-02-26
 
 ### Added

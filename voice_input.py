@@ -252,9 +252,13 @@ class VoiceInput:
         start = time.monotonic()
         try:
             model = self._get_whisper_model()
-            # language=None enables auto-detection (EN/RU/RO/etc.)
+            # Default to English to prevent German/etc misdetection.
+            # Set WHISPER_LANGUAGE=auto in .env for full auto-detect (RU/RO support).
+            whisper_lang = os.getenv("WHISPER_LANGUAGE", "en")
+            lang_arg = None if whisper_lang == "auto" else whisper_lang
+
             segments, info = model.transcribe(
-                audio_path, language=None, beam_size=3,
+                audio_path, language=lang_arg, beam_size=5,
                 vad_filter=True,
                 vad_parameters=dict(min_silence_duration_ms=400, speech_pad_ms=250),
             )

@@ -2,6 +2,22 @@
 
 All notable changes to PMC Overwatch are documented here.
 
+## [0.24.0] — 2026-02-26
+
+### Added
+- 50+ abbreviation expansions in TTS: btw→"by the way", imo, tbh, afk, gg, lol, etc.
+- System prompt now instructs AI to never use abbreviations in speech
+- Gaming/Tarkov abbreviations: MIA→"missing in action", KIA, HP, XP, DPS, PVP, PVE
+
+### Changed
+- Restored sprite-based holographic avatar (the girl) with alive animation engine
+- Renamed AI persona from SCAV-E to PMC Operator
+- Combined best of both: beautiful sprites + organic continuous motion + holo FX
+
+### Fixed
+- TTS reading "btw" letter-by-letter → now says "by the way"
+- AI using chat abbreviations that sound wrong when spoken aloud
+
 ## [0.23.0] — 2026-02-26
 
 ### Added

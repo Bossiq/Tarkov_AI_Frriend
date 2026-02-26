@@ -1,16 +1,19 @@
 """
-PMC Overwatch GUI — Premium anime avatar with full cross-fade animation.
+PMC Overwatch GUI — Premium anime avatar with layered compositing.
 
-Rendering approach:
-  • Full-image cross-fade between expression sprites (not region compositing)
-  • Talk sprites blend over base at amplitude-driven opacity
-  • Blink sprite fades in/out for smooth natural blinks
-  • Smile/think sprites blend for emotion expressions
-  • Head sway, breathing bob via PIL transforms
-  • Canvas glow rings, speaking ripples, voice bars
-  • Ambient floating particles for alive feel
+v0.20.0 features:
+  • Layered sprite compositing (independent mouth/eye/expression layers)
+  • OBS Overlay mode (transparent window, Ctrl+O to toggle)
+  • Persona editor (Ctrl+P to open)
+  • Chat history auto-save
+  • Sound effects for mode transitions
+  • Session stats in footer
+  • Language selector
+  • Ambient glow + floating particles
+  • Smoother waveform visualizer
 """
 
+import json
 import logging
 import math
 import os
@@ -18,11 +21,13 @@ import platform
 import random
 import threading
 import tkinter as tk
+import winsound
 from datetime import datetime
+from pathlib import Path
 from typing import Callable, Optional
 
 import customtkinter as ctk
-from PIL import Image, ImageTk
+from PIL import Image, ImageDraw, ImageFilter, ImageTk
 
 logger = logging.getLogger(__name__)
 
@@ -57,21 +62,49 @@ _GLOW_RGB = {
 }
 
 _ASSET_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+_LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+_PERSONA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "persona.json")
 
 
 def _lerp(a: float, b: float, t: float) -> float:
     return a + (b - a) * t
 
 
-# ═════════════════════════════════════════════════════════════════════
-# Cross-Fade Engine — full image blending between expressions
-# ═════════════════════════════════════════════════════════════════════
-class _CrossFadeEngine:
-    """Blends full expression sprites for smooth animated transitions.
+def _ease(t: float) -> float:
+    return t * t * (3.0 - 2.0 * t)
 
-    Each frame is composed by layering sprites at varying opacities:
-      base (neutral) → talk overlay → emotion overlay → blink overlay
-    This creates dramatically visible expression changes.
+
+def _build_region_mask(w: int, h: int, top: float, bot: float, fade: float) -> Image.Image:
+    """Create a vertical gradient mask for region compositing."""
+    mask = Image.new("L", (w, h), 0)
+    px = mask.load()
+    tp, bp = int(top * h), int(bot * h)
+    fp = max(1, int(fade * h))
+    for y in range(h):
+        if y < tp or y >= bp:
+            a = 0
+        elif y < tp + fp:
+            a = int(255 * (y - tp) / fp)
+        elif y >= bp - fp:
+            a = int(255 * (bp - y) / fp)
+        else:
+            a = 255
+        for x in range(w):
+            px[x, y] = a
+    return mask
+
+
+# ═════════════════════════════════════════════════════════════════════
+# Layered Compositing Engine
+# ═════════════════════════════════════════════════════════════════════
+class _LayeredEngine:
+    """Independent mouth, eye, and expression layers over base sprite.
+
+    Unlike full cross-fade, each region animates independently:
+      • Mouth region: blends talk_a/talk_b at amplitude-driven opacity
+      • Eye region: blends blink sprite for natural eyelid animation
+      • Full image: blends smile/think at low opacity for expressions
+      • Motion: head sway + breathing applied to composed result
     """
 
     _SPRITE_FILES = {
@@ -83,17 +116,23 @@ class _CrossFadeEngine:
         "smile": "smile.png",
     }
 
+    # Region definitions (fraction of image)
+    _MOUTH_TOP, _MOUTH_BOT, _MOUTH_FADE = 0.55, 0.82, 0.08
+    _EYE_TOP, _EYE_BOT, _EYE_FADE = 0.22, 0.48, 0.06
+
     def __init__(self, size: int) -> None:
         self._size = size
         self._sprites: dict[str, Image.Image] = {}
+        self._mouth_mask: Optional[Image.Image] = None
+        self._eye_mask: Optional[Image.Image] = None
         self._load()
 
-        # Blend weights (0.0 = invisible, 1.0 = fully visible)
-        self.talk_a_blend = 0.0
-        self.talk_b_blend = 0.0
-        self.blink_blend = 0.0
-        self.smile_blend = 0.0
-        self.think_blend = 0.0
+        # Blend state
+        self.mouth_blend = 0.0      # 0-1 talk intensity
+        self.mouth_wide = False     # True = talk_b, False = talk_a
+        self.blink_blend = 0.0      # 0-1 eye closing
+        self.smile_blend = 0.0      # 0-1 smile expression
+        self.think_blend = 0.0      # 0-1 think expression
 
         # Motion
         self.head_x = 0.0
@@ -113,51 +152,45 @@ class _CrossFadeEngine:
 
         if "neutral" not in self._sprites:
             self._sprites["neutral"] = Image.new("RGBA", (self._size, self._size), (20, 20, 30, 255))
-
         for fb in self._SPRITE_FILES:
             if fb not in self._sprites:
                 self._sprites[fb] = self._sprites["neutral"]
+
+        s = self._size
+        self._mouth_mask = _build_region_mask(s, s, self._MOUTH_TOP, self._MOUTH_BOT, self._MOUTH_FADE)
+        self._eye_mask = _build_region_mask(s, s, self._EYE_TOP, self._EYE_BOT, self._EYE_FADE)
 
     def render(self) -> Image.Image:
         s = self._size
         base = self._sprites["neutral"].copy()
 
-        # Layer 1: Talk expression (amplitude-driven)
-        if self.talk_a_blend > 0.02:
-            t = min(1.0, self.talk_a_blend)
-            talk_a = self._sprites["talk_a"]
-            base = Image.blend(base, talk_a, t)
+        # Layer 1: Mouth region (independent)
+        if self.mouth_blend > 0.03:
+            talk = self._sprites["talk_b" if self.mouth_wide else "talk_a"]
+            scaled_mask = self._mouth_mask.point(lambda p: int(p * min(1.0, self.mouth_blend)))
+            base.paste(talk, mask=scaled_mask)
 
-        if self.talk_b_blend > 0.02:
-            t = min(1.0, self.talk_b_blend)
-            talk_b = self._sprites["talk_b"]
-            base = Image.blend(base, talk_b, t)
+        # Layer 2: Eye region (blink)
+        if self.blink_blend > 0.03:
+            scaled_mask = self._eye_mask.point(lambda p: int(p * min(1.0, self.blink_blend)))
+            base.paste(self._sprites["blink"], mask=scaled_mask)
 
-        # Layer 2: Emotion (smile or think)
-        if self.smile_blend > 0.02:
-            t = min(1.0, self.smile_blend)
-            base = Image.blend(base, self._sprites["smile"], t)
+        # Layer 3: Expression overlay (low opacity full blend)
+        if self.smile_blend > 0.03:
+            base = Image.blend(base, self._sprites["smile"], min(0.6, self.smile_blend * 0.6))
+        if self.think_blend > 0.03:
+            base = Image.blend(base, self._sprites["think"], min(0.5, self.think_blend * 0.5))
 
-        if self.think_blend > 0.02:
-            t = min(1.0, self.think_blend)
-            base = Image.blend(base, self._sprites["think"], t)
-
-        # Layer 3: Blink (eyes closing)
-        if self.blink_blend > 0.02:
-            t = min(1.0, self.blink_blend)
-            base = Image.blend(base, self._sprites["blink"], t)
-
-        # Layer 4: Motion (head sway + breathing)
+        # Layer 4: Motion
         w, h = base.size
         nw = int(w * self.breath_scale)
         nh = int(h * self.breath_scale)
-        dx = int(self.head_x)
-        dy = int(self.head_y)
+        dx, dy = int(self.head_x), int(self.head_y)
 
         if nw != w or nh != h:
             base = base.resize((nw, nh), Image.LANCZOS)
-            cx = (nw - w) // 2 - dx
-            cy = (nh - h) // 2 - dy
+            cx = max(0, (nw - w) // 2 - dx)
+            cy = max(0, (nh - h) // 2 - dy)
             base = base.crop((cx, cy, cx + w, cy + h))
         elif abs(dx) > 0 or abs(dy) > 0:
             shifted = Image.new("RGBA", (w, h), (10, 14, 20, 255))
@@ -168,14 +201,13 @@ class _CrossFadeEngine:
 
 
 # ═════════════════════════════════════════════════════════════════════
-# Floating Particles — ambient alive effect
+# Floating Particles
 # ═════════════════════════════════════════════════════════════════════
 class _Particle:
     __slots__ = ("x", "y", "vx", "vy", "r", "alpha", "life", "max_life")
-
     def __init__(self, cx: int, cy: int) -> None:
         angle = random.uniform(0, 2 * math.pi)
-        dist = random.uniform(80, 180)
+        dist = random.uniform(80, 170)
         self.x = cx + math.cos(angle) * dist
         self.y = cy + math.sin(angle) * dist
         self.vx = random.uniform(-0.3, 0.3)
@@ -190,7 +222,7 @@ class _Particle:
 # Main GUI
 # ═════════════════════════════════════════════════════════════════════
 class OverwatchGUI(ctk.CTk):
-    """PMC Overwatch — premium anime avatar with full cross-fade animation."""
+    """PMC Overwatch — premium layered avatar with OBS overlay + persona editor."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -205,6 +237,16 @@ class OverwatchGUI(ctk.CTk):
         self._threads: list[threading.Thread] = []
         self._toggle_cb: Optional[Callable[[bool], None]] = None
         self._is_running = False
+        self._obs_mode = False
+
+        # ── Session stats ────────────────────────────────────────────
+        self._session_start = datetime.now()
+        self._words_spoken = 0
+        self._responses = 0
+
+        # ── Chat history ─────────────────────────────────────────────
+        self._chat_log: list[str] = []
+        Path(_LOG_DIR).mkdir(exist_ok=True)
 
         # ── Animation state ──────────────────────────────────────────
         self._mode = "idle"
@@ -212,7 +254,7 @@ class OverwatchGUI(ctk.CTk):
         self._photo: Optional[ImageTk.PhotoImage] = None
 
         avatar_size = min(_CANVAS_W - 40, _CANVAS_H - 60)
-        self._engine = _CrossFadeEngine(avatar_size)
+        self._engine = _LayeredEngine(avatar_size)
         self._avatar_x = (_CANVAS_W - avatar_size) // 2
         self._avatar_y = 6
 
@@ -247,10 +289,11 @@ class OverwatchGUI(ctk.CTk):
         self._particles: list[_Particle] = []
         self._particle_timer = 0.0
 
-        # Input mode
+        # Input/language
         self._input_mode = os.getenv("INPUT_MODE", "auto").lower()
+        self._language = os.getenv("WHISPER_LANGUAGE", "auto").lower()
 
-        # Voice bars
+        # Voice bars (smooth waveform)
         self._bar_target = [0.0] * _N_BARS
         self._bar_current = [0.0] * _N_BARS
 
@@ -259,8 +302,12 @@ class OverwatchGUI(ctk.CTk):
         self._build_log()
         self._build_footer()
         self._start_anim()
+
+        # Keybinds
         self.protocol("WM_DELETE_WINDOW", self._on_close)
-        logger.info("Premium cross-fade GUI initialized")
+        self.bind("<Control-o>", lambda e: self._toggle_obs())
+        self.bind("<Control-p>", lambda e: self._open_persona_editor())
+        logger.info("Layered avatar GUI initialized (v0.20.0)")
 
     # ══ HEADER ════════════════════════════════════════════════════════
     def _build_header(self) -> None:
@@ -303,7 +350,15 @@ class OverwatchGUI(ctk.CTk):
         cx = _CANVAS_W // 2
         cy = _CANVAS_H // 2 - 10
 
-        # ── Particles (behind avatar) ─────────────────────────────────
+        # ── Ambient glow (soft circle behind avatar) ──────────────────
+        if self._mode != "idle":
+            glow_a = 25 + int((math.sin(self._phase * 0.5) + 1) * 10)
+            r, g, b = glow_rgb
+            gc = f"#{max(10, r * glow_a // 255):02x}{max(14, g * glow_a // 255):02x}{max(20, b * glow_a // 255):02x}"
+            ar = self._engine._size // 2 + 15
+            cv.create_oval(cx - ar, cy - ar, cx + ar, cy + ar, fill=gc, outline="")
+
+        # ── Particles ─────────────────────────────────────────────────
         for p in self._particles:
             if p.alpha > 0.02:
                 a = int(min(1.0, p.alpha) * 80)
@@ -311,22 +366,22 @@ class OverwatchGUI(ctk.CTk):
                 g = max(14, int(glow_rgb[1] * a / 255))
                 b = max(20, int(glow_rgb[2] * a / 255))
                 pc = f"#{r:02x}{g:02x}{b:02x}"
-                pr = p.r
-                cv.create_oval(p.x - pr, p.y - pr, p.x + pr, p.y + pr,
+                cv.create_oval(p.x - p.r, p.y - p.r, p.x + p.r, p.y + p.r,
                                fill=pc, outline="")
 
         # ── Glow ring ─────────────────────────────────────────────────
         pulse = (math.sin(self._phase * 0.7) + 1) * 0.5
         if self._mode != "idle":
             ar = self._engine._size // 2
-            for i in range(4):
-                r = ar + 8 + i * 8 + int(pulse * 3)
-                a = max(0, 50 - i * 14)
+            for i in range(3):
+                r_ring = ar + 8 + i * 10 + int(pulse * 3)
+                a = max(0, 45 - i * 16)
                 rc = max(10, int(glow_rgb[0] * a / 255))
                 gc = max(14, int(glow_rgb[1] * a / 255))
                 bc = max(20, int(glow_rgb[2] * a / 255))
                 c = f"#{rc:02x}{gc:02x}{bc:02x}"
-                cv.create_oval(cx - r, cy - r, cx + r, cy + r, outline=c, width=2)
+                cv.create_oval(cx - r_ring, cy - r_ring, cx + r_ring, cy + r_ring,
+                               outline=c, width=2)
 
             if self._mode == "speaking":
                 for wi in range(3):
@@ -348,7 +403,7 @@ class OverwatchGUI(ctk.CTk):
             cv.create_image(self._avatar_x, self._avatar_y,
                             image=self._photo, anchor="nw")
 
-        # ── Voice bars ────────────────────────────────────────────────
+        # ── Waveform visualizer (smoother sine-based) ─────────────────
         total = _N_BARS * _BAR_W + (_N_BARS - 1) * _BAR_GAP
         bx = _CANVAS_W // 2 - total // 2
         by = _CANVAS_H - 22
@@ -371,19 +426,19 @@ class OverwatchGUI(ctk.CTk):
                 self._blink_dur = 0.0
                 self._double_blink = random.random() < 0.15
                 self._double_blink_count = 0
-        elif self._blink_stage == 1:  # Closing
+        elif self._blink_stage == 1:
             self._blink_dur += dt
             eng.blink_blend = _lerp(eng.blink_blend, 0.6, 0.45)
             if self._blink_dur >= 0.05:
                 self._blink_stage = 2
                 self._blink_dur = 0.0
-        elif self._blink_stage == 2:  # Closed
+        elif self._blink_stage == 2:
             self._blink_dur += dt
             eng.blink_blend = _lerp(eng.blink_blend, 1.0, 0.55)
             if self._blink_dur >= 0.08:
                 self._blink_stage = 3
                 self._blink_dur = 0.0
-        elif self._blink_stage == 3:  # Opening
+        elif self._blink_stage == 3:
             self._blink_dur += dt
             eng.blink_blend = _lerp(eng.blink_blend, 0.0, 0.35)
             if self._blink_dur >= 0.07:
@@ -397,20 +452,20 @@ class OverwatchGUI(ctk.CTk):
                     self._blink_timer = 0.0
                     self._blink_cd = random.uniform(2.5, 5.5)
 
-        # ── Head motion ──────────────────────────────────────────────
+        # ── Head motion (more dramatic) ──────────────────────────────
         self._head_timer += dt
         if self._head_timer >= self._head_cd:
             self._head_timer = 0.0
-            self._head_cd = random.uniform(1.0, 2.5)
-            self._head_target_x = random.uniform(-6.0, 6.0)
-            self._head_target_y = random.uniform(-4.0, 4.0)
-        self._head_x = _lerp(self._head_x, self._head_target_x, 0.05)
-        self._head_y = _lerp(self._head_y, self._head_target_y, 0.05)
+            self._head_cd = random.uniform(0.8, 2.0)
+            self._head_target_x = random.uniform(-10.0, 10.0)
+            self._head_target_y = random.uniform(-6.0, 6.0)
+        self._head_x = _lerp(self._head_x, self._head_target_x, 0.06)
+        self._head_y = _lerp(self._head_y, self._head_target_y, 0.06)
 
-        # ── Breathing ────────────────────────────────────────────────
-        self._breath_phase += dt * 1.1
-        breath_y = math.sin(self._breath_phase) * 3.5
-        breath_scale = 1.0 + math.sin(self._breath_phase * 0.5) * 0.012
+        # ── Breathing (stronger) ─────────────────────────────────────
+        self._breath_phase += dt * 1.2
+        breath_y = math.sin(self._breath_phase) * 5.0
+        breath_scale = 1.0 + math.sin(self._breath_phase * 0.5) * 0.018
         eng.head_x = self._head_x
         eng.head_y = self._head_y + breath_y
         eng.breath_scale = breath_scale
@@ -419,35 +474,27 @@ class OverwatchGUI(ctk.CTk):
         if mode == "speaking":
             self._amplitude += (self._amplitude_target - self._amplitude) * 0.4
             amp = self._amplitude
-            # Talk_a for quiet speech, talk_b for loud
-            if amp < 0.35:
-                eng.talk_a_blend = _lerp(eng.talk_a_blend, amp * 2.5, 0.3)
-                eng.talk_b_blend = _lerp(eng.talk_b_blend, 0.0, 0.2)
-            else:
-                eng.talk_a_blend = _lerp(eng.talk_a_blend, 0.0, 0.2)
-                eng.talk_b_blend = _lerp(eng.talk_b_blend, min(1.0, amp * 1.5), 0.3)
+            eng.mouth_blend = min(1.0, amp * 2.0)
+            eng.mouth_wide = amp > 0.4
             eng.smile_blend = _lerp(eng.smile_blend, 0.0, 0.08)
             eng.think_blend = _lerp(eng.think_blend, 0.0, 0.08)
 
         elif mode == "thinking":
-            eng.talk_a_blend = _lerp(eng.talk_a_blend, 0.0, 0.1)
-            eng.talk_b_blend = _lerp(eng.talk_b_blend, 0.0, 0.1)
+            eng.mouth_blend = _lerp(eng.mouth_blend, 0.0, 0.1)
             eng.smile_blend = _lerp(eng.smile_blend, 0.0, 0.08)
             eng.think_blend = _lerp(eng.think_blend, 0.85, 0.06)
 
         elif mode == "listening":
-            eng.talk_a_blend = _lerp(eng.talk_a_blend, 0.0, 0.1)
-            eng.talk_b_blend = _lerp(eng.talk_b_blend, 0.0, 0.1)
+            eng.mouth_blend = _lerp(eng.mouth_blend, 0.0, 0.1)
             eng.smile_blend = _lerp(eng.smile_blend, 0.25, 0.04)
             eng.think_blend = _lerp(eng.think_blend, 0.0, 0.08)
 
         else:  # idle
-            eng.talk_a_blend = _lerp(eng.talk_a_blend, 0.0, 0.08)
-            eng.talk_b_blend = _lerp(eng.talk_b_blend, 0.0, 0.08)
+            eng.mouth_blend = _lerp(eng.mouth_blend, 0.0, 0.08)
             eng.smile_blend = _lerp(eng.smile_blend, 0.0, 0.04)
             eng.think_blend = _lerp(eng.think_blend, 0.0, 0.04)
 
-        # ── Emotion overlay ──────────────────────────────────────────
+        # Emotion overlay
         if self._emotion == "happy":
             eng.smile_blend = _lerp(eng.smile_blend, 0.9, 0.06)
             self._emotion_timer += dt
@@ -457,7 +504,7 @@ class OverwatchGUI(ctk.CTk):
 
         # ── Particles ────────────────────────────────────────────────
         self._particle_timer += dt
-        if self._particle_timer > 0.3 and mode != "idle" and len(self._particles) < 15:
+        if self._particle_timer > 0.25 and mode != "idle" and len(self._particles) < 18:
             self._particle_timer = 0.0
             self._particles.append(_Particle(_CANVAS_W // 2, _CANVAS_H // 2))
 
@@ -473,13 +520,15 @@ class OverwatchGUI(ctk.CTk):
                 alive.append(p)
         self._particles = alive
 
-        # ── Voice bars ───────────────────────────────────────────────
+        # ── Voice bars (smoother sine wave) ──────────────────────────
         for i in range(_N_BARS):
             if mode in ("speaking", "listening"):
-                self._bar_target[i] = random.uniform(0.1, 0.9)
+                # Sine wave pattern for smoother look
+                wave = math.sin(self._phase * 3.0 + i * 0.4) * 0.3 + 0.5
+                self._bar_target[i] = wave * random.uniform(0.3, 1.0)
             else:
                 self._bar_target[i] = 0.0
-            self._bar_current[i] = _lerp(self._bar_current[i], self._bar_target[i], 0.25)
+            self._bar_current[i] = _lerp(self._bar_current[i], self._bar_target[i], 0.2)
 
     def _start_anim(self) -> None:
         self._tick()
@@ -500,15 +549,33 @@ class OverwatchGUI(ctk.CTk):
         wrapper.pack(fill="both", expand=True, padx=20, pady=(4, 0))
         inner = ctk.CTkFrame(wrapper, fg_color="transparent")
         inner.pack(fill="both", expand=True, padx=12, pady=12)
-        ctk.CTkLabel(inner, text="Activity Log",
+
+        # Top bar: Activity Log title + language selector
+        top_bar = ctk.CTkFrame(inner, fg_color="transparent")
+        top_bar.pack(fill="x")
+        ctk.CTkLabel(top_bar, text="Activity Log",
                      font=ctk.CTkFont(size=12, weight="bold"),
-                     text_color=_TEXT2).pack(anchor="w")
+                     text_color=_TEXT2).pack(side="left", anchor="w")
+
+        # Language selector
+        self._lang_var = ctk.StringVar(value=self._language.upper())
+        lang_menu = ctk.CTkOptionMenu(
+            top_bar, values=["AUTO", "EN", "RU", "RO"],
+            variable=self._lang_var, width=80, height=24,
+            font=ctk.CTkFont(size=10),
+            fg_color=_SURFACE, button_color=_BORDER,
+            command=self._on_lang_change)
+        lang_menu.pack(side="right")
+        ctk.CTkLabel(top_bar, text="🌐", font=ctk.CTkFont(size=12),
+                     text_color=_TEXT2).pack(side="right", padx=(0, 4))
+
         self._log = ctk.CTkTextbox(
             inner, font=ctk.CTkFont(family="Consolas", size=11),
-            height=130, fg_color=_SURFACE, text_color=_TEXT, corner_radius=8,
+            height=120, fg_color=_SURFACE, text_color=_TEXT, corner_radius=8,
             border_width=1, border_color=_BORDER, wrap="word")
         self._log.pack(fill="both", expand=True, pady=(6, 0))
         self._log.configure(state="disabled")
+
         _chat_in = ctk.CTkFrame(inner, fg_color="transparent")
         _chat_in.pack(fill="x", pady=(8, 0))
         self._chat_entry = ctk.CTkEntry(
@@ -539,12 +606,115 @@ class OverwatchGUI(ctk.CTk):
         self._status_lbl = ctk.CTkLabel(inner, text="Offline",
                                         font=ctk.CTkFont(size=12), text_color=_TEXT2)
         self._status_lbl.pack(side="left")
-        mode_labels = {"auto": "Auto", "toggle": "Toggle (F4)", "push": "PTT (F4)"}
+
+        # Stats + shortcuts
+        mode_labels = {"auto": "Auto", "toggle": "Toggle", "push": "PTT"}
         mode_text = mode_labels.get(self._input_mode, "Auto")
-        ctk.CTkLabel(inner, text=f"\U0001f3a4 {mode_text}", font=ctk.CTkFont(size=11),
-                     text_color=_TEXT2).pack(side="right", padx=(0, 12))
-        ctk.CTkLabel(inner, text="v0.19.0", font=ctk.CTkFont(size=11),
-                     text_color=_MUTED).pack(side="right")
+        ctk.CTkLabel(inner, text=f"Ctrl+O: OBS  Ctrl+P: Persona",
+                     font=ctk.CTkFont(size=9), text_color=_MUTED).pack(side="right", padx=(0, 8))
+        ctk.CTkLabel(inner, text="v0.20.0", font=ctk.CTkFont(size=11),
+                     text_color=_MUTED).pack(side="right", padx=(0, 8))
+
+    # ══ OBS OVERLAY MODE ═════════════════════════════════════════════
+    def _toggle_obs(self) -> None:
+        self._obs_mode = not self._obs_mode
+        if self._obs_mode:
+            self.overrideredirect(True)
+            self.attributes("-topmost", True)
+            try:
+                self.attributes("-transparentcolor", _BG)
+            except Exception:
+                pass
+            self.log("🎬 OBS Overlay ON — Ctrl+O to disable")
+        else:
+            self.overrideredirect(False)
+            self.attributes("-topmost", False)
+            try:
+                self.attributes("-transparentcolor", "")
+            except Exception:
+                pass
+            self.log("🎬 OBS Overlay OFF")
+
+    # ══ PERSONA EDITOR ═══════════════════════════════════════════════
+    def _open_persona_editor(self) -> None:
+        win = ctk.CTkToplevel(self)
+        win.title("Persona Editor")
+        win.geometry("500x400")
+        win.configure(fg_color=_BG)
+        win.attributes("-topmost", True)
+
+        ctk.CTkLabel(win, text="🛡️ Persona Editor",
+                     font=ctk.CTkFont(size=18, weight="bold"),
+                     text_color=_TEXT).pack(pady=(16, 8))
+        ctk.CTkLabel(win, text="Edit the AI personality and system prompt",
+                     font=ctk.CTkFont(size=11), text_color=_TEXT2).pack()
+
+        # Load current persona
+        persona = self._load_persona()
+
+        frame = ctk.CTkFrame(win, fg_color=_CARD, corner_radius=12)
+        frame.pack(fill="both", expand=True, padx=20, pady=12)
+
+        ctk.CTkLabel(frame, text="Name:", font=ctk.CTkFont(size=12),
+                     text_color=_TEXT2).pack(anchor="w", padx=12, pady=(12, 0))
+        name_entry = ctk.CTkEntry(frame, fg_color=_SURFACE, text_color=_TEXT,
+                                  border_color=_BORDER, corner_radius=8)
+        name_entry.pack(fill="x", padx=12, pady=(4, 8))
+        name_entry.insert(0, persona.get("name", "PMC Operator"))
+
+        ctk.CTkLabel(frame, text="System Prompt:", font=ctk.CTkFont(size=12),
+                     text_color=_TEXT2).pack(anchor="w", padx=12)
+        prompt_box = ctk.CTkTextbox(frame, fg_color=_SURFACE, text_color=_TEXT,
+                                    corner_radius=8, height=180, wrap="word")
+        prompt_box.pack(fill="both", expand=True, padx=12, pady=(4, 12))
+        prompt_box.insert("1.0", persona.get("prompt", ""))
+
+        def save():
+            data = {
+                "name": name_entry.get().strip(),
+                "prompt": prompt_box.get("1.0", "end").strip(),
+            }
+            self._save_persona(data)
+            self.log("🛡️ Persona saved")
+            win.destroy()
+
+        ctk.CTkButton(win, text="💾 Save", width=120, height=36, corner_radius=10,
+                      font=ctk.CTkFont(size=13, weight="bold"),
+                      fg_color=_GREEN, hover_color=_GREEN_H, text_color="white",
+                      command=save).pack(pady=(0, 16))
+
+    def _load_persona(self) -> dict:
+        try:
+            if os.path.exists(_PERSONA_FILE):
+                with open(_PERSONA_FILE, "r", encoding="utf-8") as f:
+                    return json.load(f)
+        except Exception:
+            pass
+        return {"name": "PMC Operator", "prompt": ""}
+
+    def _save_persona(self, data: dict) -> None:
+        try:
+            with open(_PERSONA_FILE, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+        except Exception:
+            logger.exception("Failed to save persona")
+
+    # ══ LANGUAGE SELECTOR ════════════════════════════════════════════
+    def _on_lang_change(self, value: str) -> None:
+        lang = value.lower()
+        os.environ["WHISPER_LANGUAGE"] = lang
+        self._language = lang
+        self.log(f"🌐 Language → {value}")
+
+    # ══ SOUND EFFECTS ════════════════════════════════════════════════
+    def _play_sfx(self, freq: int = 800, duration: int = 80) -> None:
+        try:
+            threading.Thread(
+                target=winsound.Beep, args=(freq, duration),
+                daemon=True
+            ).start()
+        except Exception:
+            pass
 
     # ══ PUBLIC API ════════════════════════════════════════════════════
     def set_toggle_callback(self, cb: Callable[[bool], None]) -> None:
@@ -553,7 +723,9 @@ class OverwatchGUI(ctk.CTk):
         self._threads.append(t)
     def log(self, msg: str) -> None:
         ts = datetime.now().strftime("%H:%M:%S")
-        self.after(0, self._do_log, f"[{ts}]  {msg}\n")
+        line = f"[{ts}]  {msg}"
+        self._chat_log.append(line)
+        self.after(0, self._do_log, f"{line}\n")
     def set_status(self, text: str) -> None:
         self.after(0, self._do_status, text)
     def force_toggle_off(self) -> None:
@@ -565,6 +737,11 @@ class OverwatchGUI(ctk.CTk):
     def set_emotion(self, emotion: str) -> None:
         self.after(0, self._do_emotion, emotion)
 
+    def add_response_stats(self, word_count: int) -> None:
+        """Track stats for responses."""
+        self._words_spoken += word_count
+        self._responses += 1
+
     # ══ INTERNAL ═════════════════════════════════════════════════════
     def _do_log(self, line: str) -> None:
         self._log.configure(state="normal")
@@ -573,6 +750,7 @@ class OverwatchGUI(ctk.CTk):
         self._log.configure(state="disabled")
 
     def _set_mode(self, mode: str) -> None:
+        old_mode = self._mode
         self._mode = mode
         labels = {
             "idle": ("OFFLINE", _MUTED),
@@ -582,6 +760,12 @@ class OverwatchGUI(ctk.CTk):
         }
         t, c = labels.get(mode, ("OFFLINE", _MUTED))
         self._av_status.configure(text=t, text_color=c)
+
+        # Sound effects on mode transition
+        if old_mode != mode:
+            sfx = {"listening": 900, "speaking": 700, "thinking": 600}
+            if mode in sfx:
+                self._play_sfx(sfx[mode], 60)
 
     def _do_emotion(self, emotion: str) -> None:
         self._emotion = emotion
@@ -628,8 +812,20 @@ class OverwatchGUI(ctk.CTk):
             import threading as _t
             _t.Thread(target=self._toggle_cb, args=(True,), daemon=True).start()
 
+    def _save_chat_history(self) -> None:
+        if self._chat_log:
+            ts = self._session_start.strftime("%Y%m%d_%H%M%S")
+            path = os.path.join(_LOG_DIR, f"session_{ts}.log")
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write("\n".join(self._chat_log))
+                logger.info("Chat history saved: %s", path)
+            except Exception:
+                logger.exception("Failed to save chat history")
+
     def _on_close(self) -> None:
         self.shutdown_event.set()
+        self._save_chat_history()
         for t in self._threads:
             if t.is_alive():
                 t.join(timeout=2.0)
@@ -661,4 +857,4 @@ if __name__ == "__main__":
         app.after(0, app._on_close)
     threading.Thread(target=_demo, daemon=True).start()
     app.mainloop()
-    print("CROSS-FADE DEMO PASSED")
+    print("LAYERED V20 DEMO PASSED")

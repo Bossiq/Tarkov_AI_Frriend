@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>Real-time voice AI companion for Escape from Tarkov</strong><br/>
-  Live vector face • Audio lip-sync • Groq/Ollama LLM • Push-to-Talk • Twitch
+  Layered avatar • OBS Overlay • Persona Editor • Multilingual • Groq/Ollama LLM
 </p>
 
 <p align="center">
@@ -24,17 +24,22 @@
 
 | Feature | Description |
 |---------|-------------|
-| 🎤 **Voice Input** | Real-time speech recognition via faster-whisper (GPU accelerated) |
+| 🎤 **Voice Input** | Real-time speech recognition via faster-whisper (GPU, multilingual) |
 | 🧠 **Dual LLM** | Groq cloud (250+ tok/s, free) or Ollama local — auto-selects |
 | 🔊 **Neural TTS** | Microsoft edge-tts with per-sentence language detection |
-| 🎭 **Live Avatar** | Anime girl sprite base + PIL-drawn animated mouth/eyes overlay |
-| 🎵 **Lip Sync** | RMS amplitude → mouth opening + teeth visibility (20ms resolution) |
-| 👁️ **Eye Animation** | Multi-stage blinks, gaze wander, iris/pupil tracking |
-| 😊 **Emotion Detection** | Keyword sentiment → eyebrow + mouth expression changes |
+| 🎭 **Layered Avatar** | Independent mouth/eye/expression layers over anime sprite base |
+| 🎵 **Lip Sync** | RMS amplitude → mouth region blend (20ms resolution) |
+| 👁️ **Eye Animation** | Multi-stage blinks with independent eye region compositing |
+| 😊 **Emotion Detection** | Keyword sentiment → expression overlay changes |
 | 🎤 **Push-to-Talk** | Three input modes: Auto VAD, Toggle (F4), Hold (F4) |
-| 🌐 **Multilingual** | English, Russian, Romanian — per-sentence voice selection |
+| 🌐 **Multilingual** | English, Russian, Romanian — auto-detect speech + voice selection |
 | 📺 **Twitch Bot** | Optional chat integration for stream interactions |
 | 🎮 **Tarkov Knowledge** | Built-in quest reference database for accurate game info |
+| 🎬 **OBS Overlay** | Transparent window mode (Ctrl+O) — use as streaming overlay |
+| 🛡️ **Persona Editor** | Edit AI personality and system prompt (Ctrl+P) |
+| 💬 **Chat History** | Auto-saves session logs for review |
+| 🔔 **Sound Effects** | Audio cues for mode transitions |
+| 🌍 **Language Selector** | UI dropdown to switch language on-the-fly |
 
 ## 🏗 Architecture
 

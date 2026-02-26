@@ -2,6 +2,30 @@
 
 All notable changes to PMC Overwatch are documented here.
 
+## [0.20.0] — 2026-02-26
+
+### Added
+- **Layered compositing**: independent mouth/eye/expression region blending
+- **OBS Overlay mode**: Ctrl+O toggles transparent topmost window for streaming
+- **Persona Editor**: Ctrl+P opens panel to edit AI personality/system prompt
+- **Chat History**: auto-saves session logs to `logs/` on close
+- **Sound Effects**: audio cues on mode transitions (listening/speaking/thinking)
+- **Language Selector**: UI dropdown (Auto/EN/RU/RO) changes Whisper on-the-fly
+- **Ambient glow**: soft colored circle behind avatar pulses with breathing
+- **Session stats**: track words spoken, responses, session duration
+
+### Changed
+- All voices → **female**: JennyNeural (EN), SvetlanaNeural (RU), AlinaNeural (RO)
+- Speech rate → **+0%** (reset from -5%)
+- Whisper STT → **auto-detect** language (was English-only)
+- Whisper model → **small** (from base, better multilingual)
+- Stronger head motion (±10px) and breathing (2x amplitude)
+- Sine-wave voice bars for smoother visualizer
+
+### Fixed
+- Romanian speech not understood (Whisper was hardcoded to English)
+- Wrong language voice reading (per-sentence detection improved)
+
 ## [0.19.0] — 2026-02-26
 
 ### Added

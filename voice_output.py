@@ -42,18 +42,18 @@ _VOICES_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/mod
 
 # ── edge-tts Voice Mapping ───────────────────────────────────────────
 _EDGE_VOICES = {
-    "en": "en-US-ChristopherNeural",      # warm male — PMC tone
-    "ru": "ru-RU-DmitryNeural",            # natural male Russian
-    "ro": "ro-RO-EmilNeural",              # natural male Romanian
-    "de": "de-DE-ConradNeural",            # German fallback
-    "fr": "fr-FR-HenriNeural",             # French fallback
+    "en": "en-US-JennyNeural",             # warm female — natural
+    "ru": "ru-RU-SvetlanaNeural",           # natural female Russian
+    "ro": "ro-RO-AlinaNeural",              # female Romanian (only option)
+    "de": "de-DE-KatjaNeural",              # German female fallback
+    "fr": "fr-FR-DeniseNeural",             # French female fallback
 }
 
 # ── Defaults ─────────────────────────────────────────────────────────
 _DEFAULT_VOICE = "af_heart"
 _DEFAULT_SPEED = 1.1
 _DEFAULT_LANG = "en-us"
-_DEFAULT_EDGE_RATE = "-5%"
+_DEFAULT_EDGE_RATE = "+0%"
 _SAY_TIMEOUT_S = 30
 _AMPLITUDE_CHUNK_MS = 20  # RMS calculation every 20ms
 

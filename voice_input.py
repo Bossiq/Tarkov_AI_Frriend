@@ -35,7 +35,7 @@ _MIN_SPEECH_CHUNKS = 2
 _PRE_BUFFER_CHUNKS = 10          # Capture more speech start (was 6)
 _SILENCE_FACTOR = 0.35           # Slightly more sensitive silence detection
 _QUEUE_TIMEOUT = 0.2             # Never block longer than 200ms
-_DEFAULT_WHISPER_MODEL = "base"
+_DEFAULT_WHISPER_MODEL = "small"
 _DEFAULT_COMPUTE_TYPE = "int8"
 
 
@@ -252,9 +252,9 @@ class VoiceInput:
         start = time.monotonic()
         try:
             model = self._get_whisper_model()
-            # Default to English to prevent German/etc misdetection.
-            # Set WHISPER_LANGUAGE=auto in .env for full auto-detect (RU/RO support).
-            whisper_lang = os.getenv("WHISPER_LANGUAGE", "en")
+            # Auto-detect language for multilingual support (EN/RU/RO).
+            # Set WHISPER_LANGUAGE=en in .env to force English only.
+            whisper_lang = os.getenv("WHISPER_LANGUAGE", "auto")
             lang_arg = None if whisper_lang == "auto" else whisper_lang
 
             segments, info = model.transcribe(

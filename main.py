@@ -52,7 +52,11 @@ class SCAVESystem:
         # ── Components (lightweight init only) ─────────────────────────
         self._vc = VideoCapture()
         self._vi = VoiceInput(shutdown_event=self._shutdown, gui_log=self._gui.log)
-        self._vo = VoiceOutput(gui_callback=self._gui.log)
+        self._vo = VoiceOutput(
+            gui_callback=self._gui.log,
+            on_speak_start=lambda: self._gui.set_vis_mode("speaking"),
+            on_speak_end=lambda: self._gui.set_vis_mode("thinking"),
+        )
 
         self._brain: Optional[Brain] = None
         self._twitch_bot: Optional[TwitchBot] = None
@@ -222,14 +226,21 @@ class SCAVESystem:
 
         # ── Stream response sentence-by-sentence ──────────────────────
         self._gui.set_status("Thinking...")
+        self._gui.set_vis_mode("thinking")
         self._gui.log("[Brain] Generating response...")
 
         response_start = time.monotonic()
-        self._gui.set_status("Speaking...")
         self._vo.speak_streamed(self._brain.stream_sentences(text_prompt))
         elapsed = time.monotonic() - response_start
         logger.info("Response cycle completed in %.1fs", elapsed)
-        self._gui.set_status("Listening..." if self._running else "Offline")
+
+        # Revert to listening or offline
+        if self._running:
+            self._gui.set_vis_mode("listening")
+            self._gui.set_status("Listening...")
+        else:
+            self._gui.set_vis_mode("idle")
+            self._gui.set_status("Offline")
 
 
 # ── Entry point ──────────────────────────────────────────────────────

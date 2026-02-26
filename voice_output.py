@@ -120,8 +120,15 @@ def _detect_language(text: str) -> str:
 class VoiceOutput:
     """Multilingual TTS with edge-tts neural voices, Kokoro fallback."""
 
-    def __init__(self, gui_callback: Optional[Callable[[str], None]] = None) -> None:
+    def __init__(
+        self,
+        gui_callback: Optional[Callable[[str], None]] = None,
+        on_speak_start: Optional[Callable[[], None]] = None,
+        on_speak_end: Optional[Callable[[], None]] = None,
+    ) -> None:
         self._gui_callback = gui_callback
+        self._on_speak_start = on_speak_start
+        self._on_speak_end = on_speak_end
         self._voice = os.getenv("TTS_VOICE", _DEFAULT_VOICE)
         self._speed = float(os.getenv("TTS_SPEED", str(_DEFAULT_SPEED)))
         self._lang = os.getenv("TTS_LANG", _DEFAULT_LANG)
@@ -208,8 +215,12 @@ class VoiceOutput:
                 if fade_len > 1:
                     audio[:fade_len] *= np.linspace(0.0, 1.0, fade_len, dtype=np.float32)
                     audio[-fade_len:] *= np.linspace(1.0, 0.0, fade_len, dtype=np.float32)
+                if self._on_speak_start:
+                    self._on_speak_start()
                 sd.play(audio, samplerate=sr)
                 sd.wait()
+                if self._on_speak_end:
+                    self._on_speak_end()
                 return True
             finally:
                 try:
@@ -397,8 +408,12 @@ class VoiceOutput:
                     text, voice=self._voice, speed=self._speed, lang=self._lang,
                 )
             processed = self._postprocess_audio(samples, sr)
+            if self._on_speak_start:
+                self._on_speak_start()
             sd.play(processed, samplerate=sr)
             sd.wait()
+            if self._on_speak_end:
+                self._on_speak_end()
         except Exception:
             logger.exception("Kokoro TTS failed -- falling back to 'say'")
             self._speak_say(text)

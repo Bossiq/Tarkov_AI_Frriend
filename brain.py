@@ -26,11 +26,11 @@ logger = logging.getLogger(__name__)
 # ── Constants ────────────────────────────────────────────────────────
 _DEFAULT_MODEL = "qwen2.5:3b"
 _DEFAULT_NUM_CTX = 4096         # Room for full quest reference + conversation
-_DEFAULT_NUM_PREDICT = 512      # Allow longer detailed answers
-_DEFAULT_TEMPERATURE = 0.6
-_DEFAULT_TOP_P = 0.9
+_DEFAULT_NUM_PREDICT = 256      # Fast but complete answers
+_DEFAULT_TEMPERATURE = 0.5
+_DEFAULT_TOP_P = 0.85
 _DEFAULT_REPEAT_PENALTY = 1.1
-_MAX_MEMORY = 8
+_MAX_MEMORY = 6
 _MAX_RETRIES = 3
 _RETRY_BASE_DELAY = 1.0
 

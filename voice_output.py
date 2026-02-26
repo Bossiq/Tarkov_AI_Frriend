@@ -1,19 +1,25 @@
 """
-Voice Output — high-fidelity TTS via Kokoro (ONNX) for PMC Overwatch.
+Voice Output — Multilingual TTS via edge-tts (Microsoft Neural Voices).
 
-Uses the Kokoro 82M neural TTS model running locally via ONNX Runtime.
+Primary engine: edge-tts (neural voices for EN/RU/RO)
+Fallback: Kokoro ONNX (English only)
+Last resort: macOS `say` command
+
 Features:
-  • Text preprocessing for natural speech (abbreviation expansion, pause injection)
-  • Minimal audio post-processing (normalization + gentle fade only — no quality loss)
-  • Async pipeline: pre-synthesizes next sentence while current one plays
-  • Falls back to the macOS ``say`` command if Kokoro fails to initialise.
+  * Auto language detection (Cyrillic → Russian, Romanian chars → Romanian)
+  * Neural female voices per language
+  * Async pipeline: pre-synthesizes next sentence while current plays
+  * Text preprocessing for natural speech
 """
 
+import asyncio
+import io
 import logging
 import os
 import queue
 import re
 import subprocess
+import tempfile
 import threading
 import urllib.request
 from pathlib import Path
@@ -21,6 +27,7 @@ from typing import Callable, Generator, Optional
 
 import numpy as np
 import sounddevice as sd
+import soundfile as sf
 
 logger = logging.getLogger(__name__)
 
@@ -32,13 +39,24 @@ _VOICES_FILE = _MODELS_DIR / "voices-v1.0.bin"
 _ONNX_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx"
 _VOICES_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin"
 
+# ── edge-tts Voice Mapping ───────────────────────────────────────────
+_EDGE_VOICES = {
+    "en": "en-US-JennyNeural",
+    "ru": "ru-RU-SvetlanaNeural",
+    "ro": "ro-RO-AlinaNeural",
+}
+_EDGE_RATE = "+0%"  # Normal speaking rate
+
 # ── Defaults ─────────────────────────────────────────────────────────
-_DEFAULT_VOICE = "af_heart"     # Female voice — warm, natural
-_DEFAULT_SPEED = 1.2
+_DEFAULT_VOICE = "af_heart"
+_DEFAULT_SPEED = 1.1
 _DEFAULT_LANG = "en-us"
 _SAY_TIMEOUT_S = 30
-_FADE_MS = 3                    # Very gentle 3ms fade (just anti-click)
 _SENTINEL = object()
+
+# ── Language detection patterns ──────────────────────────────────────
+_CYRILLIC = re.compile(r'[\u0400-\u04FF]')
+_ROMANIAN_CHARS = re.compile(r'[ĂăÂâÎîȘșȚț]')
 
 # ── Text-preprocessing patterns ──────────────────────────────────────
 _NUMBER_UNIT = re.compile(r"(\d+)\s*(m|km|kg|hrs?|mins?|secs?)\b", re.IGNORECASE)
@@ -54,7 +72,6 @@ _EMOJI_PATTERN = re.compile(
     re.UNICODE,
 )
 
-# Abbreviation expansion
 _ABBREV_MAP = {
     r"\bETA\b": "E.T.A.",
     r"\bMIA\b": "M.I.A.",
@@ -75,7 +92,7 @@ _TENS = [
 
 
 def _number_to_words(n: int) -> str:
-    """Convert an integer (0–9999) to English words."""
+    """Convert an integer (0-9999) to English words."""
     if n < 0:
         return f"minus {_number_to_words(-n)}"
     if n < 20:
@@ -91,8 +108,17 @@ def _number_to_words(n: int) -> str:
     return str(n)
 
 
+def _detect_language(text: str) -> str:
+    """Detect language from text content. Returns 'ru', 'ro', or 'en'."""
+    if _CYRILLIC.search(text):
+        return "ru"
+    if _ROMANIAN_CHARS.search(text):
+        return "ro"
+    return "en"
+
+
 class VoiceOutput:
-    """High-quality TTS with Kokoro, falling back to macOS ``say``."""
+    """Multilingual TTS with edge-tts neural voices, Kokoro fallback."""
 
     def __init__(self, gui_callback: Optional[Callable[[str], None]] = None) -> None:
         self._gui_callback = gui_callback
@@ -101,36 +127,99 @@ class VoiceOutput:
         self._lang = os.getenv("TTS_LANG", _DEFAULT_LANG)
         self._kokoro = None
         self._kokoro_lock = threading.Lock()
+        self._edge_available = False
 
-        # Initialize in background so GUI doesn't freeze on load
+        # Check edge-tts availability
+        try:
+            import edge_tts  # noqa: F401
+            self._edge_available = True
+            logger.info("edge-tts available (multilingual neural voices)")
+        except ImportError:
+            logger.warning("edge-tts not installed — falling back to Kokoro")
+
+        # Initialize Kokoro in background as fallback
         threading.Thread(target=self._init_kokoro, name="KokoroInit", daemon=True).start()
 
     # ── Kokoro initialisation ─────────────────────────────────────────
     def _init_kokoro(self) -> None:
-        """Load the Kokoro model, downloading files if necessary."""
         try:
             self._ensure_model_files()
             from kokoro_onnx import Kokoro
             self._kokoro = Kokoro(str(_ONNX_FILE), str(_VOICES_FILE))
-            logger.info(
-                "Kokoro TTS loaded (voice=%s, speed=%.1f, lang=%s)",
-                self._voice, self._speed, self._lang,
-            )
+            logger.info("Kokoro TTS loaded as fallback (voice=%s)", self._voice)
         except Exception:
-            logger.exception("Failed to load Kokoro — falling back to macOS 'say'")
+            logger.exception("Failed to load Kokoro fallback")
             self._kokoro = None
 
     def _ensure_model_files(self) -> None:
-        """Download model files if they don't exist."""
         _MODELS_DIR.mkdir(exist_ok=True)
         for path, url, label in [
             (_ONNX_FILE, _ONNX_URL, "model"),
             (_VOICES_FILE, _VOICES_URL, "voices"),
         ]:
             if not path.exists():
-                logger.info("Downloading Kokoro %s → %s …", label, path.name)
+                logger.info("Downloading Kokoro %s -> %s ...", label, path.name)
                 urllib.request.urlretrieve(url, path)
                 logger.info("Downloaded %s (%.1f MB)", path.name, path.stat().st_size / 1e6)
+
+    # ══════════════════════════════════════════════════════════════════
+    #  LANGUAGE DETECTION + EDGE-TTS
+    # ══════════════════════════════════════════════════════════════════
+    def _speak_edge(self, text: str, lang: str) -> bool:
+        """Synthesize and play speech via edge-tts. Returns True on success."""
+        try:
+            import edge_tts
+
+            voice = _EDGE_VOICES.get(lang, _EDGE_VOICES["en"])
+            logger.debug("edge-tts: voice=%s lang=%s text=%s", voice, lang, text[:60])
+
+            # Run async edge-tts in a new event loop
+            async def _synthesize():
+                communicate = edge_tts.Communicate(text, voice, rate=_EDGE_RATE)
+                audio_data = b""
+                async for chunk in communicate.stream():
+                    if chunk["type"] == "audio":
+                        audio_data += chunk["data"]
+                return audio_data
+
+            loop = asyncio.new_event_loop()
+            try:
+                mp3_bytes = loop.run_until_complete(_synthesize())
+            finally:
+                loop.close()
+
+            if not mp3_bytes:
+                logger.warning("edge-tts returned empty audio")
+                return False
+
+            # Decode MP3 to PCM via temp file
+            with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
+                tmp.write(mp3_bytes)
+                tmp_path = tmp.name
+
+            try:
+                audio, sr = sf.read(tmp_path, dtype="float32")
+                # Normalize
+                peak = np.max(np.abs(audio))
+                if peak > 0.01:
+                    audio = audio * (0.85 / peak)
+                # Fade edges (15ms)
+                fade_len = min(int(sr * 15 / 1000), len(audio) // 4)
+                if fade_len > 1:
+                    audio[:fade_len] *= np.linspace(0.0, 1.0, fade_len, dtype=np.float32)
+                    audio[-fade_len:] *= np.linspace(1.0, 0.0, fade_len, dtype=np.float32)
+                sd.play(audio, samplerate=sr)
+                sd.wait()
+                return True
+            finally:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+
+        except Exception:
+            logger.exception("edge-tts failed")
+            return False
 
     # ══════════════════════════════════════════════════════════════════
     #  TEXT PREPROCESSING
@@ -145,75 +234,72 @@ class VoiceOutput:
         t = _MARKDOWN_ITALIC.sub(r"\1", t)
         t = _MARKDOWN_BULLET.sub("", t)
 
-        # Expand number+unit combos
-        def _expand_number_unit(m: re.Match) -> str:
-            num = int(m.group(1))
-            unit = m.group(2).lower().rstrip("s")
-            unit_map = {
-                "m": "metres", "km": "kilometres", "kg": "kilograms",
-                "hr": "hours", "min": "minutes", "sec": "seconds",
-            }
-            word_unit = unit_map.get(unit, m.group(2))
-            if num == 1:
-                word_unit = word_unit.rstrip("s")
-            return f"{_number_to_words(num)} {word_unit}"
+        # Only expand numbers for English text
+        if not _CYRILLIC.search(t):
+            def _expand_number_unit(m: re.Match) -> str:
+                num = int(m.group(1))
+                unit = m.group(2).lower().rstrip("s")
+                unit_map = {
+                    "m": "metres", "km": "kilometres", "kg": "kilograms",
+                    "hr": "hours", "min": "minutes", "sec": "seconds",
+                }
+                word_unit = unit_map.get(unit, m.group(2))
+                if num == 1:
+                    word_unit = word_unit.rstrip("s")
+                return f"{_number_to_words(num)} {word_unit}"
 
-        t = _NUMBER_UNIT.sub(_expand_number_unit, t)
+            t = _NUMBER_UNIT.sub(_expand_number_unit, t)
 
-        # Expand standalone numbers (1-4 digits)
-        def _expand_standalone_number(m: re.Match) -> str:
-            n = int(m.group(0))
-            return _number_to_words(n) if n <= 9999 else m.group(0)
+            def _expand_standalone_number(m: re.Match) -> str:
+                n = int(m.group(0))
+                return _number_to_words(n) if n <= 9999 else m.group(0)
 
-        t = re.sub(r"\b\d{1,4}\b", _expand_standalone_number, t)
+            t = re.sub(r"\b\d{1,4}\b", _expand_standalone_number, t)
 
-        for pattern, replacement in _ABBREV_MAP.items():
-            t = re.sub(pattern, replacement, t, flags=re.IGNORECASE)
+            for pattern, replacement in _ABBREV_MAP.items():
+                t = re.sub(pattern, replacement, t, flags=re.IGNORECASE)
 
         t = _MULTI_PUNCT.sub(r"\1", t)
         t = " ".join(t.split())
         return t.strip()
 
     # ══════════════════════════════════════════════════════════════════
-    #  AUDIO POST-PROCESSING (minimal — preserve quality)
+    #  AUDIO POST-PROCESSING
     # ══════════════════════════════════════════════════════════════════
     @staticmethod
     def _postprocess_audio(samples: np.ndarray, sample_rate: int) -> np.ndarray:
-        """Light post-processing: normalize volume + anti-click fade only.
-
-        No pitch shifting, no aggressive trimming — these degrade quality.
-        """
+        """Light post-processing: normalize + anti-click fade."""
         audio = samples.copy().astype(np.float32)
         if len(audio) == 0:
             return audio
-
-        # Volume normalization -- prevent clipping, ensure audibility
         peak = np.max(np.abs(audio))
         if peak > 0.01:
             audio = audio * (0.85 / peak)
-
-        # Smooth fade-in/out (15ms) to eliminate clicks between sentences
         fade_len = min(int(sample_rate * 15 / 1000), len(audio) // 4)
         if fade_len > 1:
             audio[:fade_len] *= np.linspace(0.0, 1.0, fade_len, dtype=np.float32)
             audio[-fade_len:] *= np.linspace(1.0, 0.0, fade_len, dtype=np.float32)
-
-        # Add small silence padding at end (50ms) so sentences don't run together
         padding = np.zeros(int(sample_rate * 0.05), dtype=np.float32)
         audio = np.concatenate([audio, padding])
-
         return audio
 
     # ══════════════════════════════════════════════════════════════════
     #  PUBLIC API
     # ══════════════════════════════════════════════════════════════════
     def speak(self, text: str) -> None:
-        """Speak *text* aloud."""
+        """Speak *text* aloud with auto language detection."""
         if not text or not text.strip():
             return
         clean = self._preprocess_for_speech(text)
         if self._gui_callback:
             self._gui_callback(f"[PMC] {text}")
+
+        # Detect language and try edge-tts first
+        lang = _detect_language(text)
+        if self._edge_available and self._speak_edge(clean, lang):
+            return
+
+        # Fallback: Kokoro (English only)
         if self._kokoro is not None:
             self._speak_kokoro(clean)
         else:
@@ -222,8 +308,29 @@ class VoiceOutput:
     def speak_streamed(self, sentences: Generator[str, None, None]) -> None:
         """Speak sentences as they stream from the LLM.
 
-        Async pipeline: synthesises next sentence while current plays.
+        Uses edge-tts for multilingual, Kokoro fallback for English.
         """
+        full_response: list[str] = []
+
+        # If edge-tts available, use it for each sentence directly
+        if self._edge_available:
+            for sentence in sentences:
+                if not sentence.strip():
+                    continue
+                full_response.append(sentence)
+                clean = self._preprocess_for_speech(sentence)
+                if not clean.strip():
+                    continue
+                lang = _detect_language(sentence)
+                if not self._speak_edge(clean, lang):
+                    # Fallback to Kokoro for this sentence
+                    if self._kokoro is not None:
+                        self._speak_kokoro(clean)
+            if self._gui_callback and full_response:
+                self._gui_callback(f"[PMC] {' '.join(full_response)}")
+            return
+
+        # No edge-tts: use Kokoro async pipeline
         if self._kokoro is None:
             full = []
             for s in sentences:
@@ -236,7 +343,6 @@ class VoiceOutput:
             return
 
         audio_q: queue.Queue = queue.Queue(maxsize=3)
-        full_response: list[str] = []
 
         def _producer() -> None:
             for sentence in sentences:
@@ -244,9 +350,7 @@ class VoiceOutput:
                     continue
                 full_response.append(sentence)
                 speech_text = self._preprocess_for_speech(sentence)
-                # Guard: skip empty strings (Kokoro crashes on empty input)
                 if not speech_text or not speech_text.strip():
-                    logger.debug("Skipping empty speech text")
                     continue
                 try:
                     with self._kokoro_lock:
@@ -260,7 +364,7 @@ class VoiceOutput:
                     audio_q.put((processed, sr))
                 except Exception:
                     logger.exception("TTS synthesis failed: %s", speech_text[:50])
-                    continue  # Don't break — try next sentence
+                    continue
             audio_q.put(_SENTINEL)
 
         producer = threading.Thread(target=_producer, name="TTSSynth", daemon=True)
@@ -283,7 +387,7 @@ class VoiceOutput:
 
         producer.join(timeout=5.0)
         if self._gui_callback and full_response:
-            self._gui_callback(f"🎙 PMC: {' '.join(full_response)}")
+            self._gui_callback(f"[PMC] {' '.join(full_response)}")
 
     # ── Kokoro single sentence ────────────────────────────────────────
     def _speak_kokoro(self, text: str) -> None:
@@ -296,7 +400,7 @@ class VoiceOutput:
             sd.play(processed, samplerate=sr)
             sd.wait()
         except Exception:
-            logger.exception("Kokoro TTS failed — falling back to 'say'")
+            logger.exception("Kokoro TTS failed -- falling back to 'say'")
             self._speak_say(text)
 
     # ── Platform fallback ─────────────────────────────────────────────
@@ -312,11 +416,11 @@ class VoiceOutput:
             except Exception:
                 logger.exception("Fallback TTS error")
         else:
-            logger.warning("No fallback TTS on this platform — Kokoro is required")
+            logger.warning("No fallback TTS on this platform")
 
 
 if __name__ == "__main__":
     from logging_config import setup_logging
     setup_logging()
     vo = VoiceOutput()
-    vo.speak("Target spotted at two hundred metres. Moving to intercept. Stay sharp.")
+    vo.speak("Hello there, this is a test of the neural voice engine.")

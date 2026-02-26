@@ -13,3 +13,4 @@ kokoro-onnx
 python-dotenv
 customtkinter
 Pillow
+edge-tts

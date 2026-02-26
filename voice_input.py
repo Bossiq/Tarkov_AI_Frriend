@@ -252,13 +252,18 @@ class VoiceInput:
         start = time.monotonic()
         try:
             model = self._get_whisper_model()
-            segments, _ = model.transcribe(
-                audio_path, language="en", beam_size=5,
+            # language=None enables auto-detection (EN/RU/RO/etc.)
+            segments, info = model.transcribe(
+                audio_path, language=None, beam_size=5,
                 vad_filter=True,
                 vad_parameters=dict(min_silence_duration_ms=500, speech_pad_ms=300),
             )
             text = " ".join(s.text.strip() for s in segments).strip()
-            logger.info("Transcribed in %.1fs: '%s'", time.monotonic() - start, text[:80])
+            detected = getattr(info, 'language', 'unknown')
+            logger.info(
+                "Transcribed in %.1fs [lang=%s]: '%s'",
+                time.monotonic() - start, detected, text[:80]
+            )
             return text if text else None
         except Exception:
             logger.exception("Transcription failed")

@@ -1,13 +1,17 @@
 """
-PMC Overwatch GUI — Sprite-based animated avatar with real facial expressions.
+PMC Overwatch GUI — Vector-animated character face.
 
-Design (VTuber / Visual Novel style):
-  * 6 expression sprites: neutral, talk_a, talk_b, blink, think + original
-  * Speaking: cycles through mouth-open sprites (like real lip-sync)
-  * Blinking: swaps to blink sprite every 3-6s for ~180ms
-  * Thinking: shows thinking expression sprite
-  * Listening: subtle idle animation with neutral expression
-  * Head micro-motion via PIL crop offset (±2px, continuous)
+Every facial feature is drawn on the Tkinter Canvas using geometric shapes
+and animated independently with smooth linear interpolation (lerp):
+  * Head outline with subtle tilt / breathing
+  * Eyes: sclera, iris, pupil — with gaze tracking, dilation, blink
+  * Eyebrows: arcs that raise/furrow per expression
+  * Mouth: bezier-approximated arcs for 5 viseme shapes
+  * Hair: layered polygon with sway
+  * Neck / shoulders silhouette
+  * State-reactive glow ring + voice bars
+
+24 FPS render loop. All motion uses exponential smoothing for natural feel.
 """
 
 import logging
@@ -17,33 +21,14 @@ import random
 import threading
 import tkinter as tk
 from datetime import datetime
-from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Optional
 
 import customtkinter as ctk
 
 logger = logging.getLogger(__name__)
 
-try:
-    from PIL import Image, ImageDraw, ImageFilter, ImageTk
-    _HAS_PIL = True
-except ImportError:
-    _HAS_PIL = False
-
-# ── Asset paths ──────────────────────────────────────────────────────
-_ASSETS = Path(__file__).parent / "assets"
-_SPRITE_FILES = {
-    "neutral": _ASSETS / "neutral.png",
-    "talk_a": _ASSETS / "talk_a.png",
-    "talk_b": _ASSETS / "talk_b.png",
-    "blink": _ASSETS / "blink.png",
-    "think": _ASSETS / "think.png",
-    "avatar": _ASSETS / "avatar.png",  # fallback / listen
-}
-
 # ── Palette ──────────────────────────────────────────────────────────
 _BG = "#0a0e14"
-_BG_RGB = (10, 14, 20)
 _CARD = "#12171f"
 _SURFACE = "#1a1f28"
 _GREEN = "#00d26a"
@@ -58,17 +43,15 @@ _MUTED = "#3d4450"
 _BORDER = "#252b35"
 
 # Sizing
-_AV_SIZE = 240
-_CANVAS_W = 380
-_CANVAS_H = 380
+_CANVAS_W = 400
+_CANVAS_H = 420
 _FPS = 24
-_MOTION_STEPS = 32  # frames per head-motion cycle
 
 # Voice bars
-_N_BARS = 29
+_N_BARS = 31
 _BAR_W = 3
 _BAR_GAP = 1
-_BAR_MAX_H = 16
+_BAR_MAX_H = 14
 
 # Glow per state
 _GLOW = {"idle": _MUTED, "listening": _GREEN, "thinking": _AMBER, "speaking": _CYAN}
@@ -77,109 +60,63 @@ _GLOW_RGB = {
     "thinking": (255, 165, 2), "speaking": (0, 210, 255),
 }
 
-# Particles
-_N_PARTICLES = 14
+# ── Skin / feature colours ───────────────────────────────────────────
+_SKIN = "#f0c8a0"
+_SKIN_SHADOW = "#d4a87a"
+_SKIN_DARK = "#c0906a"
+_LIP = "#c06070"
+_LIP_INNER = "#802030"
+_EYE_WHITE = "#f8f4f0"
+_IRIS = "#3a9a5e"
+_PUPIL = "#0a0a0a"
+_BROW = "#4a3020"
+_HAIR = "#1a1a30"
+_HAIR_HIGHLIGHT = "#2a2a48"
+_LASH = "#201010"
 
 
-class _Particle:
-    __slots__ = ("angle", "radius", "speed", "size")
-    def __init__(self):
-        self.angle = random.uniform(0, 2 * math.pi)
-        self.radius = random.uniform(126, 158)
-        self.speed = random.uniform(0.003, 0.010)
-        self.size = random.uniform(1.0, 2.2)
+def _lerp(a: float, b: float, t: float) -> float:
+    return a + (b - a) * t
 
 
-def _load_sprite(path: Path, size: int) -> Optional["Image.Image"]:
-    """Load a sprite, resize, and return as RGBA PIL image."""
-    if not _HAS_PIL or not path.exists():
-        return None
-    try:
-        img = Image.open(path).convert("RGBA")
-        img = img.resize((size + 16, size + 16), Image.Resampling.LANCZOS)
-        return img
-    except Exception:
-        logger.exception("Failed to load sprite: %s", path.name)
-        return None
-
-
-def _apply_circular_mask(img: "Image.Image", size: int) -> "Image.Image":
-    """Crop center, apply circular mask, composite on dark bg."""
-    # Crop center region
-    w, h = img.size
-    left = (w - size) // 2
-    top = (h - size) // 2
-    cropped = img.crop((left, top, left + size, top + size))
-
-    mask = Image.new("L", (size, size), 0)
-    d = ImageDraw.Draw(mask)
-    d.ellipse([3, 3, size - 4, size - 4], fill=255)
-    mask = mask.filter(ImageFilter.GaussianBlur(1.5))
-    cropped.putalpha(mask)
-
-    bg = Image.new("RGBA", (size, size), (*_BG_RGB, 255))
-    bg.paste(cropped, (0, 0), cropped)
-    return bg.convert("RGB")
-
-
-def _prepare_sprites():
-    """Load all expression sprites and create motion-shifted variants."""
-    sprites: Dict[str, "Image.Image"] = {}
-    for name, path in _SPRITE_FILES.items():
-        img = _load_sprite(path, _AV_SIZE)
-        if img:
-            sprites[name] = img
-            logger.info("Loaded sprite: %s (%s)", name, path.name)
-
-    if not sprites:
-        return {}, []
-
-    # Create motion-shifted frames from 'neutral' or 'avatar' base
-    base = sprites.get("neutral", sprites.get("avatar"))
-    motion_frames: List["ImageTk.PhotoImage"] = []
-    if base:
-        for i in range(_MOTION_STEPS):
-            t = i / _MOTION_STEPS * 2 * math.pi
-            dx = int(math.sin(t) * 2)  # ±2px head tilt
-            dy = int(math.sin(t * 0.5) * 1.5)  # ±1.5px breathing
-
-            w, h = base.size
-            cx, cy = w // 2, h // 2
-            half = _AV_SIZE // 2
-
-            left = max(0, cx - half + dx)
-            top = max(0, cy - half + dy)
-            right = min(w, left + _AV_SIZE)
-            bottom = min(h, top + _AV_SIZE)
-
-            frame = base.crop((left, top, right, bottom))
-            if frame.size != (_AV_SIZE, _AV_SIZE):
-                frame = frame.resize((_AV_SIZE, _AV_SIZE), Image.Resampling.LANCZOS)
-
-            motion_frames.append(
-                ImageTk.PhotoImage(_apply_circular_mask(
-                    frame.resize((_AV_SIZE + 16, _AV_SIZE + 16), Image.Resampling.LANCZOS),
-                    _AV_SIZE
-                ))
-            )
-
-    # Pre-render expression PhotoImages
-    expr_photos: Dict[str, "ImageTk.PhotoImage"] = {}
-    for name, img in sprites.items():
-        expr_photos[name] = ImageTk.PhotoImage(_apply_circular_mask(img, _AV_SIZE))
-
-    logger.info(
-        "Sprites ready: %d expressions, %d motion frames",
-        len(expr_photos), len(motion_frames)
+class _FaceState:
+    """Interpolatable face state — all values 0-1 or in pixels."""
+    __slots__ = (
+        "head_x", "head_y", "head_tilt",
+        "eye_open_l", "eye_open_r",
+        "gaze_x", "gaze_y",
+        "pupil_size",
+        "brow_l", "brow_r",
+        "mouth_open", "mouth_wide", "mouth_smile",
     )
-    return expr_photos, motion_frames
+
+    def __init__(self):
+        self.head_x = 0.0       # px offset
+        self.head_y = 0.0       # px offset
+        self.head_tilt = 0.0    # radians
+        self.eye_open_l = 1.0   # 0=closed, 1=open
+        self.eye_open_r = 1.0
+        self.gaze_x = 0.0      # -1 to 1
+        self.gaze_y = 0.0      # -1 to 1
+        self.pupil_size = 1.0   # multiplier
+        self.brow_l = 0.0       # -1=frown, 0=neutral, 1=raised
+        self.brow_r = 0.0
+        self.mouth_open = 0.0   # 0=closed, 1=wide open
+        self.mouth_wide = 0.5   # 0=narrow, 1=wide spread
+        self.mouth_smile = 0.3  # -1=frown, 0=neutral, 1=smile
+
+    def lerp_to(self, target: "_FaceState", speed: float = 0.15) -> None:
+        for attr in self.__slots__:
+            cur = getattr(self, attr)
+            tgt = getattr(target, attr)
+            setattr(self, attr, _lerp(cur, tgt, speed))
 
 
 class OverwatchGUI(ctk.CTk):
     def __init__(self) -> None:
         super().__init__()
         self.title("PMC Overwatch")
-        self.geometry("860x900")
+        self.geometry("860x920")
         self.minsize(640, 660)
         ctk.set_appearance_mode("dark")
         self.configure(fg_color=_BG)
@@ -197,25 +134,29 @@ class OverwatchGUI(ctk.CTk):
         self._pulse_vis = True
         self._dot_color = _MUTED
 
-        # Blink timer
-        self._blink_cd = random.uniform(3.0, 5.5)
-        self._blink_timer = 0.0
-        self._blink_active = False
-        self._blink_duration = 0.0
+        # Face animation
+        self._face = _FaceState()
+        self._target = _FaceState()
 
-        # Speaking lip-sync
+        # Blink
+        self._blink_cd = random.uniform(2.5, 5.0)
+        self._blink_timer = 0.0
+        self._blinking = False
+        self._blink_dur = 0.0
+
+        # Speaking mouth
         self._talk_timer = 0.0
-        self._talk_frame = 0  # 0=neutral, 1=talk_a, 2=talk_b
+        self._talk_phase = 0.0
+
+        # Idle micro-motion
+        self._idle_timer = 0.0
+        self._gaze_target_x = 0.0
+        self._gaze_target_y = 0.0
+        self._gaze_change_cd = random.uniform(1.5, 4.0)
 
         # Voice bars
         self._bar_target = [0.0] * _N_BARS
         self._bar_current = [0.0] * _N_BARS
-
-        # Particles
-        self._particles = [_Particle() for _ in range(_N_PARTICLES)]
-
-        # Load sprites
-        self._expr_photos, self._motion_frames = _prepare_sprites()
 
         self._build_header()
         self._build_agent()
@@ -223,10 +164,9 @@ class OverwatchGUI(ctk.CTk):
         self._build_footer()
         self._start_anim()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+        logger.info("Vector-animated face GUI initialized")
 
-    # ══════════════════════════════════════════════════════════════════
-    #  HEADER
-    # ══════════════════════════════════════════════════════════════════
+    # ══ HEADER ════════════════════════════════════════════════════════
     def _build_header(self) -> None:
         hdr = ctk.CTkFrame(self, corner_radius=16, fg_color=_CARD,
                            border_width=1, border_color=_BORDER)
@@ -248,9 +188,7 @@ class OverwatchGUI(ctk.CTk):
             command=self._on_toggle)
         self._btn.pack(side="right")
 
-    # ══════════════════════════════════════════════════════════════════
-    #  AGENT CANVAS
-    # ══════════════════════════════════════════════════════════════════
+    # ══ CANVAS ════════════════════════════════════════════════════════
     def _build_agent(self) -> None:
         self._cv = tk.Canvas(self, width=_CANVAS_W, height=_CANVAS_H,
                              bg=_BG, highlightthickness=0, bd=0)
@@ -260,131 +198,334 @@ class OverwatchGUI(ctk.CTk):
             font=ctk.CTkFont(size=12, weight="bold"), text_color=_MUTED)
         self._av_status.pack(pady=(0, 4))
 
-    def _render(self) -> None:
+    # ══ FACE DRAWING ═════════════════════════════════════════════════
+    def _draw_face(self) -> None:
         cv = self._cv
         cv.delete("all")
-        cx = _CANVAS_W // 2
-        cy = _CANVAS_H // 2 - 10
-        dt = 1.0 / _FPS
+        f = self._face
+        cx = _CANVAS_W // 2 + f.head_x
+        cy = _CANVAS_H // 2 - 20 + f.head_y
         glow_c = _GLOW.get(self._mode, _MUTED)
         glow_rgb = _GLOW_RGB.get(self._mode, (61, 68, 80))
 
-        # ── Aura rings ────────────────────────────────────────────────
+        # ── Glow ring (behind face) ──────────────────────────────────
+        pulse = (math.sin(self._phase * 0.7) + 1) * 0.5
         if self._mode != "idle":
-            p = (math.sin(self._phase * 0.6) + 1) * 0.5
             for i in range(3):
-                r = _AV_SIZE // 2 + 14 + i * 12 + p * 5
-                a = max(0, 45 - i * 16)
+                r = 108 + i * 10 + pulse * 4
+                a = max(0, 40 - i * 14)
                 rc = int(glow_rgb[0] * a / 255)
                 gc = int(glow_rgb[1] * a / 255)
                 bc = int(glow_rgb[2] * a / 255)
                 c = f"#{max(10, rc):02x}{max(14, gc):02x}{max(20, bc):02x}"
                 cv.create_oval(cx - r, cy - r, cx + r, cy + r, outline=c, width=2)
 
-        # ── Particles ─────────────────────────────────────────────────
-        for pt in self._particles:
-            pt.angle += pt.speed
-            r = pt.radius + math.sin(self._phase * 0.4 + pt.angle * 2) * 5
-            px = cx + math.cos(pt.angle) * r
-            py = cy + math.sin(pt.angle) * r * 0.85
-            sz = pt.size
-            if self._mode == "speaking":
-                sz *= 1.2 + math.sin(self._phase * 3 + pt.angle) * 0.3
-            cv.create_oval(px - sz, py - sz, px + sz, py + sz,
-                           fill=glow_c, outline="")
+        # ── Neck ─────────────────────────────────────────────────────
+        nw, nh = 40, 30
+        cv.create_rectangle(cx - nw, cy + 78, cx + nw, cy + 78 + nh,
+                            fill=_SKIN_SHADOW, outline="")
+        # Shoulders silhouette
+        cv.create_arc(cx - 100, cy + 80, cx + 100, cy + 160,
+                      start=0, extent=180, fill=_CARD, outline="")
 
-        # ══════════════════════════════════════════════════════════════
-        #  SPRITE SELECTION (real facial expressions)
-        # ══════════════════════════════════════════════════════════════
-        photo = None
+        # ── Head shape (oval) ────────────────────────────────────────
+        head_rx, head_ry = 85, 100
+        cv.create_oval(cx - head_rx, cy - head_ry, cx + head_rx, cy + head_ry,
+                       fill=_SKIN, outline=_SKIN_SHADOW, width=2)
 
-        # --- Blink ---
-        self._blink_timer += dt
-        if self._blink_active:
-            self._blink_duration += dt
-            if self._blink_duration < 0.18:  # 180ms blink
-                photo = self._expr_photos.get("blink")
+        # Slight jaw shadow
+        cv.create_arc(cx - 72, cy + 20, cx + 72, cy + 100,
+                      start=200, extent=140, fill=_SKIN_SHADOW, outline="")
+
+        # Cheek blush (subtle)
+        for side in [-1, 1]:
+            bx = cx + side * 55
+            by = cy + 22
+            cv.create_oval(bx - 14, by - 8, bx + 14, by + 8,
+                           fill="#f0b8a0", outline="")
+
+        # ── Hair (back layer) ────────────────────────────────────────
+        hair_sway = math.sin(self._phase * 0.3) * 2
+        # Main hair mass
+        cv.create_arc(cx - 90, cy - 110, cx + 90, cy - 10,
+                      start=0, extent=180, fill=_HAIR, outline="")
+        # Side bangs
+        for side in [-1, 1]:
+            pts = [
+                cx + side * 80, cy - 60,
+                cx + side * 92 + hair_sway, cy - 10,
+                cx + side * 88 + hair_sway, cy + 40,
+                cx + side * 78, cy + 60,
+                cx + side * 72, cy + 20,
+                cx + side * 75, cy - 30,
+            ]
+            cv.create_polygon(pts, fill=_HAIR, outline="", smooth=True)
+
+        # Fringe / bangs across forehead
+        fringe_pts = [
+            cx - 75, cy - 70,
+            cx - 50, cy - 85,
+            cx - 20, cy - 72 + hair_sway * 0.5,
+            cx, cy - 78,
+            cx + 20, cy - 74 + hair_sway * 0.3,
+            cx + 50, cy - 86,
+            cx + 75, cy - 70,
+            cx + 80, cy - 55,
+            cx, cy - 58,
+            cx - 80, cy - 55,
+        ]
+        cv.create_polygon(fringe_pts, fill=_HAIR, outline="", smooth=True)
+
+        # Hair highlights
+        cv.create_arc(cx - 60, cy - 100, cx + 20, cy - 50,
+                      start=20, extent=140, outline=_HAIR_HIGHLIGHT, width=2, style="arc")
+
+        # ── Eyes ─────────────────────────────────────────────────────
+        eye_y = cy - 12
+        eye_spacing = 32
+
+        for side_idx, side in enumerate([-1, 1]):
+            ex = cx + side * eye_spacing
+            eye_open = f.eye_open_l if side == -1 else f.eye_open_r
+
+            # Eye socket shadow
+            cv.create_oval(ex - 22, eye_y - 14, ex + 22, eye_y + 14,
+                           fill=_SKIN_SHADOW, outline="")
+
+            if eye_open > 0.08:
+                # Sclera (white)
+                ey_h = 12 * eye_open
+                cv.create_oval(ex - 18, eye_y - ey_h, ex + 18, eye_y + ey_h,
+                               fill=_EYE_WHITE, outline="#d0ccc8", width=1)
+
+                # Iris
+                iris_r = 9 * min(eye_open, 0.85)
+                gx = f.gaze_x * 5
+                gy = f.gaze_y * 3
+                cv.create_oval(ex + gx - iris_r, eye_y + gy - iris_r,
+                               ex + gx + iris_r, eye_y + gy + iris_r,
+                               fill=_IRIS, outline="#2a7a4a", width=1)
+
+                # Pupil
+                pr = 4 * f.pupil_size * min(eye_open, 0.85)
+                cv.create_oval(ex + gx - pr, eye_y + gy - pr,
+                               ex + gx + pr, eye_y + gy + pr,
+                               fill=_PUPIL, outline="")
+
+                # Catchlight (reflection dot)
+                cv.create_oval(ex + gx + 2, eye_y + gy - 4,
+                               ex + gx + 5, eye_y + gy - 1,
+                               fill="white", outline="")
+
+                # Upper eyelid line
+                cv.create_arc(ex - 18, eye_y - 13, ex + 18, eye_y + 5,
+                              start=20, extent=140, outline=_LASH, width=2, style="arc")
             else:
-                self._blink_active = False
-                self._blink_duration = 0.0
-                self._blink_timer = 0.0
-                self._blink_cd = random.uniform(3.0, 6.0)
-        elif self._blink_timer >= self._blink_cd:
-            self._blink_active = True
-            self._blink_duration = 0.0
+                # Closed eye — just a line
+                cv.create_line(ex - 16, eye_y, ex + 16, eye_y,
+                               fill=_LASH, width=2, smooth=True)
 
-        # --- Speaking: cycle through mouth sprites ---
-        if self._mode == "speaking" and not self._blink_active:
-            self._talk_timer += dt
-            # Cycle: neutral → talk_a → talk_b → talk_a → neutral → ...
-            # at ~8 swaps/sec for realistic lip movement
-            if self._talk_timer > 0.12:
-                self._talk_frame = (self._talk_frame + 1) % 4
-                self._talk_timer = 0.0
+        # ── Eyebrows ─────────────────────────────────────────────────
+        for side, brow_val in [(-1, f.brow_l), (1, f.brow_r)]:
+            bx = cx + side * 32
+            by = eye_y - 22 - brow_val * 6
+            bw = 20
+            # Arch shape
+            inner_y = by + 2 + brow_val * 2
+            outer_y = by - 1
+            pts = [
+                bx - side * bw, inner_y,
+                bx, outer_y - 3,
+                bx + side * bw * 0.3, outer_y,
+            ]
+            cv.create_line(pts, fill=_BROW, width=3, smooth=True)
 
-            talk_seq = ["neutral", "talk_a", "talk_b", "talk_a"]
-            sprite_name = talk_seq[self._talk_frame]
-            photo = self._expr_photos.get(sprite_name)
+        # ── Nose ─────────────────────────────────────────────────────
+        nose_y = cy + 12
+        cv.create_line(cx - 2, cy - 4, cx - 4, nose_y, fill=_SKIN_DARK, width=1)
+        cv.create_oval(cx - 6, nose_y - 3, cx + 6, nose_y + 3,
+                       outline=_SKIN_DARK, width=1)
 
-        # --- Thinking: thinking expression ---
-        elif self._mode == "thinking" and not self._blink_active:
-            photo = self._expr_photos.get("think")
+        # ── Mouth ────────────────────────────────────────────────────
+        mouth_y = cy + 38
+        mouth_w = 22 + f.mouth_wide * 10
+        open_h = f.mouth_open * 14
+        smile = f.mouth_smile
 
-        # --- Listening/Idle: motion frames (subtle head movement) ---
-        if photo is None and not self._blink_active:
-            if self._motion_frames:
-                idx = int(self._phase * 1.5) % len(self._motion_frames)
-                # Use motion frame (continuous head micro-movement)
-                cv.create_image(cx, cy, image=self._motion_frames[idx], anchor="center")
-                photo = None  # Skip the photo draw below
-            else:
-                photo = self._expr_photos.get("neutral", self._expr_photos.get("avatar"))
+        if open_h < 1.5:
+            # Closed mouth — curved line
+            smile_curve = smile * 4
+            pts = [
+                cx - mouth_w, mouth_y,
+                cx - mouth_w * 0.5, mouth_y + smile_curve,
+                cx, mouth_y + smile_curve * 1.2,
+                cx + mouth_w * 0.5, mouth_y + smile_curve,
+                cx + mouth_w, mouth_y,
+            ]
+            cv.create_line(pts, fill=_LIP, width=2, smooth=True)
+        else:
+            # Open mouth
+            # Upper lip
+            cv.create_arc(cx - mouth_w, mouth_y - open_h * 0.3,
+                          cx + mouth_w, mouth_y + open_h * 0.8,
+                          start=0, extent=180, fill=_LIP_INNER, outline=_LIP, width=2)
+            # Lower lip
+            cv.create_arc(cx - mouth_w * 0.9, mouth_y - open_h * 0.2,
+                          cx + mouth_w * 0.9, mouth_y + open_h,
+                          start=180, extent=180, fill=_LIP, outline=_LIP, width=1)
+            # Teeth hint (when wide open)
+            if open_h > 6:
+                teeth_w = mouth_w * 0.7
+                cv.create_rectangle(cx - teeth_w, mouth_y,
+                                    cx + teeth_w, mouth_y + min(open_h * 0.3, 4),
+                                    fill="#f0ece8", outline="")
 
-        # Draw the expression sprite
-        if photo is not None:
-            cv.create_image(cx, cy, image=photo, anchor="center")
-
-        # ── Glow border ring ──────────────────────────────────────────
-        pulse = (math.sin(self._phase * 0.8) + 1) * 0.5
-        ring_r = _AV_SIZE // 2 + 3 + pulse * 2
-        ring_w = 3 if self._mode != "idle" else 1
-        cv.create_oval(cx - ring_r, cy - ring_r, cx + ring_r, cy + ring_r,
-                       outline=glow_c, width=ring_w)
+        # ── Headset / tactical gear ──────────────────────────────────
+        # Earpiece
+        for side in [-1, 1]:
+            hx = cx + side * 82
+            hy = cy - 5
+            cv.create_oval(hx - 10, hy - 14, hx + 10, hy + 14,
+                           fill="#303038", outline="#404048", width=2)
+            # Band across top
+        cv.create_arc(cx - 82, cy - 96, cx + 82, cy - 20,
+                      start=0, extent=180, outline="#383840", width=3, style="arc")
+        # Mic boom
+        mic_pts = [
+            cx + 72, cy + 2,
+            cx + 60, cy + 32,
+            cx + 35, cy + 42,
+        ]
+        cv.create_line(mic_pts, fill="#404048", width=3, smooth=True)
+        cv.create_oval(cx + 30, cy + 38, cx + 40, cy + 48,
+                       fill="#505058", outline="#606068")
 
         # ── Speaking: ripple waves ────────────────────────────────────
         if self._mode == "speaking":
+            ring_cx = _CANVAS_W // 2
+            ring_cy = _CANVAS_H // 2 - 20
             for wi in range(3):
-                wp = self._phase * 2.5 + wi * 2.0
-                wr = _AV_SIZE // 2 + 8 + (wp % 4.0) * 10
+                wp = self._phase * 2.0 + wi * 2.0
+                wr = 110 + (wp % 4.0) * 12
                 wa = max(0, 1.0 - (wp % 4.0) / 4.0)
                 if wa > 0.05:
-                    rv = int(glow_rgb[0] * wa * 0.5)
-                    gv = int(glow_rgb[1] * wa * 0.5)
-                    bv = int(glow_rgb[2] * wa * 0.5)
+                    rv = int(glow_rgb[0] * wa * 0.4)
+                    gv = int(glow_rgb[1] * wa * 0.4)
+                    bv = int(glow_rgb[2] * wa * 0.4)
                     wc = f"#{max(10, rv):02x}{max(14, gv):02x}{max(20, bv):02x}"
-                    cv.create_oval(cx - wr, cy - wr, cx + wr, cy + wr,
+                    cv.create_oval(ring_cx - wr, ring_cy - wr,
+                                   ring_cx + wr, ring_cy + wr,
                                    outline=wc, width=1)
 
         # ── Voice bars ────────────────────────────────────────────────
         total_w = _N_BARS * _BAR_W + (_N_BARS - 1) * _BAR_GAP
-        bx = cx - total_w // 2
-        by = cy + _AV_SIZE // 2 + 22
+        bx = _CANVAS_W // 2 - total_w // 2
+        by = _CANVAS_H - 22
         for i in range(_N_BARS):
             h = max(1, int(self._bar_current[i] * _BAR_MAX_H))
             x = bx + i * (_BAR_W + _BAR_GAP)
             cv.create_rectangle(x, by - h, x + _BAR_W, by, fill=glow_c, outline="")
             cv.create_rectangle(x, by, x + _BAR_W, by + h, fill=glow_c, outline="")
 
-    # ── Animation loop ────────────────────────────────────────────────
+    # ══ ANIMATION LOGIC ══════════════════════════════════════════════
+    def _update_targets(self, dt: float) -> None:
+        t = self._target
+        mode = self._mode
+
+        # ── Blink ────────────────────────────────────────────────────
+        self._blink_timer += dt
+        if self._blinking:
+            self._blink_dur += dt
+            if self._blink_dur < 0.07:
+                t.eye_open_l = t.eye_open_r = 0.0
+            elif self._blink_dur < 0.14:
+                t.eye_open_l = t.eye_open_r = 0.3
+            else:
+                self._blinking = False
+                self._blink_dur = 0.0
+                self._blink_timer = 0.0
+                self._blink_cd = random.uniform(2.5, 5.5)
+                t.eye_open_l = t.eye_open_r = 1.0
+        elif self._blink_timer >= self._blink_cd:
+            self._blinking = True
+            self._blink_dur = 0.0
+
+        # ── Gaze micro-movement ──────────────────────────────────────
+        self._idle_timer += dt
+        if self._idle_timer >= self._gaze_change_cd:
+            self._idle_timer = 0
+            self._gaze_change_cd = random.uniform(1.5, 4.0)
+            if mode == "thinking":
+                self._gaze_target_x = random.uniform(-0.6, 0.6)
+                self._gaze_target_y = random.uniform(-0.8, -0.2)
+            elif mode == "listening":
+                self._gaze_target_x = random.uniform(-0.3, 0.3)
+                self._gaze_target_y = random.uniform(-0.2, 0.2)
+            else:
+                self._gaze_target_x = random.uniform(-0.4, 0.4)
+                self._gaze_target_y = random.uniform(-0.3, 0.3)
+
+        t.gaze_x = self._gaze_target_x
+        t.gaze_y = self._gaze_target_y
+
+        # ── Head breathing / sway ────────────────────────────────────
+        t.head_x = math.sin(self._phase * 0.25) * 2.5
+        t.head_y = math.sin(self._phase * 0.15) * 2.0
+
+        # ── Mode-specific expressions ────────────────────────────────
+        if mode == "speaking":
+            self._talk_timer += dt
+            self._talk_phase += dt * 10  # Fast oscillation
+            # Viseme cycle: closed → half → wide → half → closed
+            wave = (math.sin(self._talk_phase) + 1) * 0.5
+            noise = random.uniform(0, 0.3)
+            t.mouth_open = wave * 0.8 + noise * 0.2
+            t.mouth_wide = 0.4 + wave * 0.4
+            t.mouth_smile = 0.1
+            t.brow_l = 0.1 + wave * 0.15
+            t.brow_r = 0.1 + wave * 0.15
+            t.pupil_size = 0.9
+
+        elif mode == "thinking":
+            t.mouth_open = 0.0
+            t.mouth_wide = 0.4
+            t.mouth_smile = -0.1
+            t.brow_l = 0.5  # Raised
+            t.brow_r = 0.3
+            t.pupil_size = 0.8
+
+        elif mode == "listening":
+            t.mouth_open = 0.0
+            t.mouth_wide = 0.5
+            t.mouth_smile = 0.2
+            t.brow_l = 0.1
+            t.brow_r = 0.1
+            t.pupil_size = 1.1
+
+        else:  # idle
+            t.mouth_open = 0.0
+            t.mouth_wide = 0.5
+            t.mouth_smile = 0.15
+            t.brow_l = 0.0
+            t.brow_r = 0.0
+            t.pupil_size = 1.0
+
+        # Smooth interpolation
+        speed = 0.25 if mode == "speaking" else 0.12
+        self._face.lerp_to(t, speed)
+
     def _start_anim(self) -> None:
         self._tick()
 
     def _tick(self) -> None:
         if self.shutdown_event.is_set():
             return
-        self._phase += 0.1
+        dt = 1.0 / _FPS
+        self._phase += dt
 
-        # Update bar targets
+        self._update_targets(dt)
+
+        # Voice bars
         if self._mode == "speaking":
             for i in range(_N_BARS):
                 cw = 1.0 - abs(i - _N_BARS // 2) / (_N_BARS // 2) * 0.4
@@ -392,7 +533,7 @@ class OverwatchGUI(ctk.CTk):
         elif self._mode == "thinking":
             for i in range(_N_BARS):
                 w = (math.sin(self._phase * 3.0 + i * 0.3) + 1) * 0.5
-                self._bar_target[i] = w * 0.15
+                self._bar_target[i] = w * 0.14
         elif self._mode == "listening":
             for i in range(_N_BARS):
                 self._bar_target[i] = 0.02 + (math.sin(self._phase * 0.5 + i * 0.15) + 1) * 0.02
@@ -401,14 +542,12 @@ class OverwatchGUI(ctk.CTk):
                 self._bar_target[i] = 0.0
 
         for i in range(_N_BARS):
-            self._bar_current[i] += (self._bar_target[i] - self._bar_current[i]) * 0.35
+            self._bar_current[i] += (self._bar_target[i] - self._bar_current[i]) * 0.3
 
-        self._render()
+        self._draw_face()
         self._anim_id = self.after(1000 // _FPS, self._tick)
 
-    # ══════════════════════════════════════════════════════════════════
-    #  LOG
-    # ══════════════════════════════════════════════════════════════════
+    # ══ LOG ═══════════════════════════════════════════════════════════
     def _build_log(self) -> None:
         f = ctk.CTkFrame(self, corner_radius=16, fg_color=_CARD,
                          border_width=1, border_color=_BORDER)
@@ -425,9 +564,7 @@ class OverwatchGUI(ctk.CTk):
             wrap="word", border_width=0)
         self._log.pack(fill="both", expand=True, padx=12, pady=(6, 12))
 
-    # ══════════════════════════════════════════════════════════════════
-    #  FOOTER
-    # ══════════════════════════════════════════════════════════════════
+    # ══ FOOTER ════════════════════════════════════════════════════════
     def _build_footer(self) -> None:
         ft = ctk.CTkFrame(self, corner_radius=16, fg_color=_CARD,
                           border_width=1, border_color=_BORDER, height=42)
@@ -441,12 +578,10 @@ class OverwatchGUI(ctk.CTk):
         self._status_lbl = ctk.CTkLabel(inner, text="Offline",
                                         font=ctk.CTkFont(size=12), text_color=_TEXT2)
         self._status_lbl.pack(side="left")
-        ctk.CTkLabel(inner, text="v11.0", font=ctk.CTkFont(size=11),
+        ctk.CTkLabel(inner, text="v12.0", font=ctk.CTkFont(size=11),
                      text_color=_MUTED).pack(side="right")
 
-    # ══════════════════════════════════════════════════════════════════
-    #  PUBLIC API (thread-safe)
-    # ══════════════════════════════════════════════════════════════════
+    # ══ PUBLIC API (thread-safe) ═════════════════════════════════════
     def set_toggle_callback(self, cb: Callable[[bool], None]) -> None:
         self._toggle_cb = cb
     def register_thread(self, t: threading.Thread) -> None:
@@ -461,9 +596,7 @@ class OverwatchGUI(ctk.CTk):
     def set_vis_mode(self, mode: str) -> None:
         self.after(0, self._set_mode, mode)
 
-    # ══════════════════════════════════════════════════════════════════
-    #  INTERNAL
-    # ══════════════════════════════════════════════════════════════════
+    # ══ INTERNAL ═════════════════════════════════════════════════════
     def _do_log(self, line: str) -> None:
         self._log.configure(state="normal")
         self._log.insert("end", line)

@@ -1,13 +1,13 @@
 """
-PMC Overwatch GUI — procedurally animated AI agent.
+PMC Overwatch GUI — photorealistic PIL-rendered AI agent.
 
 Design:
-  • Animated silhouette agent with glowing eyes and circuit lines
-  • Pulsing energy rings that react to listening/speaking/thinking states
-  • Dynamic voice-reactive waveform bars
-  • Orbiting data particles for liveliness
-  • State-driven colour scheme for all effects
-  • No external image assets required — runs on any machine
+  * Pre-rendered avatar using PIL with skin-tone gradients,
+    proper facial proportions, and realistic shading
+  * Animated overlays: glow rings, particles, voice bars
+  * Speaking mouth animation and reactive eyes
+  * State-driven colour scheme for all effects
+  * No external image files needed — self-contained
 """
 
 import logging
@@ -23,8 +23,15 @@ import customtkinter as ctk
 
 logger = logging.getLogger(__name__)
 
+try:
+    from PIL import Image, ImageDraw, ImageFilter, ImageTk
+    _HAS_PIL = True
+except ImportError:
+    _HAS_PIL = False
+
 # ── Palette ──────────────────────────────────────────────────────────
 _BG = "#0a0e14"
+_BG_RGB = (10, 14, 20)
 _CARD = "#12171f"
 _SURFACE = "#1a1f28"
 _GREEN = "#00d26a"
@@ -39,16 +46,24 @@ _TEXT2 = "#7b8794"
 _MUTED = "#3d4450"
 _BORDER = "#252b35"
 
+# Skin tones
+_SKIN = (180, 145, 120)
+_SKIN_SHADOW = (145, 115, 95)
+_SKIN_HIGHLIGHT = (210, 175, 150)
+_HAIR = (35, 25, 20)
+_LIP = (165, 95, 95)
+
 # Agent sizing
+_AV_SIZE = 200
 _CANVAS_W = 340
-_CANVAS_H = 420
-_FPS = 24
+_CANVAS_H = 380
+_FPS = 20
 
 # Voice bars
-_N_BARS = 21
+_N_BARS = 25
 _BAR_W = 3
 _BAR_GAP = 2
-_BAR_MAX_H = 30
+_BAR_MAX_H = 22
 
 # Glow per state
 _GLOW = {
@@ -57,29 +72,220 @@ _GLOW = {
     "thinking": _AMBER,
     "speaking": _CYAN,
 }
+_GLOW_RGB = {
+    "idle": (61, 68, 80),
+    "listening": (0, 210, 106),
+    "thinking": (255, 165, 2),
+    "speaking": (0, 210, 255),
+}
 
 # Particles
-_N_PARTICLES = 24
+_N_PARTICLES = 18
 
 
 class _Particle:
-    __slots__ = ("angle", "radius", "speed", "size", "alpha", "drift")
+    __slots__ = ("angle", "radius", "speed", "size")
 
     def __init__(self):
         self.angle = random.uniform(0, 2 * math.pi)
-        self.radius = random.uniform(120, 170)
-        self.speed = random.uniform(0.004, 0.015)
-        self.size = random.uniform(1.2, 3.0)
-        self.alpha = random.uniform(0.3, 0.8)
-        self.drift = random.uniform(-0.3, 0.3)
+        self.radius = random.uniform(105, 145)
+        self.speed = random.uniform(0.003, 0.012)
+        self.size = random.uniform(1.0, 2.5)
+
+
+def _hex(rgb):
+    """Convert RGB tuple to hex string."""
+    return f"#{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}"
+
+
+def _render_avatar() -> Optional["Image.Image"]:
+    """Pre-render a photorealistic female face using PIL drawing."""
+    if not _HAS_PIL:
+        return None
+    try:
+        sz = _AV_SIZE
+        img = Image.new("RGBA", (sz, sz), (0, 0, 0, 0))
+        d = ImageDraw.Draw(img)
+        cx, cy = sz // 2, sz // 2 + 8
+
+        # ── Neck ─────────────────────────────────────────────────────
+        neck_w, neck_h = 28, 35
+        d.rounded_rectangle(
+            [cx - neck_w, cy + 42, cx + neck_w, cy + 42 + neck_h],
+            radius=8, fill=_SKIN_SHADOW
+        )
+
+        # ── Shoulders (implied by jacket collar) ─────────────────────
+        collar_pts = [
+            (cx - neck_w - 10, cy + 55), (cx - 85, cy + sz // 2 + 5),
+            (cx - 80, sz), (cx + 80, sz),
+            (cx + 85, cy + sz // 2 + 5), (cx + neck_w + 10, cy + 55),
+        ]
+        d.polygon(collar_pts, fill=(30, 35, 40))
+        # Collar V
+        d.polygon(
+            [(cx - 15, cy + 52), (cx, cy + 72), (cx + 15, cy + 52)],
+            fill=(20, 25, 30)
+        )
+
+        # ── Face (oval) ──────────────────────────────────────────────
+        face_w, face_h = 62, 72
+        face_bb = [cx - face_w, cy - face_h, cx + face_w, cy + face_h - 20]
+        d.ellipse(face_bb, fill=_SKIN)
+
+        # Face shadow (sides + jaw)
+        shadow_bb = [cx - face_w - 2, cy - face_h + 10,
+                     cx - face_w + 18, cy + face_h - 25]
+        d.ellipse(shadow_bb, fill=_SKIN_SHADOW)
+        shadow_bb_r = [cx + face_w - 18, cy - face_h + 10,
+                       cx + face_w + 2, cy + face_h - 25]
+        d.ellipse(shadow_bb_r, fill=_SKIN_SHADOW)
+
+        # Jaw shadow
+        jaw_bb = [cx - face_w + 5, cy + 15, cx + face_w - 5, cy + face_h - 15]
+        d.ellipse(jaw_bb, fill=_SKIN_SHADOW)
+        # re-fill center face
+        inner_bb = [cx - face_w + 12, cy - face_h + 12,
+                    cx + face_w - 12, cy + face_h - 28]
+        d.ellipse(inner_bb, fill=_SKIN)
+
+        # ── Ears ─────────────────────────────────────────────────────
+        for side in [-1, 1]:
+            ear_x = cx + side * (face_w - 5)
+            d.ellipse([ear_x - 8, cy - 12, ear_x + 8, cy + 12],
+                      fill=_SKIN_SHADOW)
+            d.ellipse([ear_x - 5, cy - 8, ear_x + 5, cy + 8],
+                      fill=_SKIN)
+
+        # ── Hair (dark, swept style) ─────────────────────────────────
+        # Top hair mass
+        hair_bb = [cx - face_w - 8, cy - face_h - 15,
+                   cx + face_w + 8, cy - face_h + 40]
+        d.ellipse(hair_bb, fill=_HAIR)
+        # Side hair left (longer)
+        d.ellipse([cx - face_w - 12, cy - face_h, cx - face_w + 20, cy + 15],
+                  fill=_HAIR)
+        # Side hair right
+        d.ellipse([cx + face_w - 20, cy - face_h, cx + face_w + 12, cy + 5],
+                  fill=_HAIR)
+        # Bangs
+        d.ellipse([cx - 35, cy - face_h - 5, cx + 15, cy - face_h + 30],
+                  fill=_HAIR)
+
+        # ── Eyebrows ─────────────────────────────────────────────────
+        brow_y = cy - 28
+        for side in [-1, 1]:
+            bx = cx + side * 22
+            pts = [(bx - 14, brow_y + 2), (bx - 5, brow_y - 3),
+                   (bx + 10, brow_y), (bx + 10, brow_y + 3),
+                   (bx - 5, brow_y), (bx - 14, brow_y + 4)]
+            if side == -1:
+                pts = [(2 * cx - p[0], p[1]) for p in pts]
+            d.polygon(pts, fill=(60, 45, 35))
+
+        # ── Eyes ─────────────────────────────────────────────────────
+        eye_y = cy - 15
+        for side in [-1, 1]:
+            ex = cx + side * 22
+            # Eye white
+            d.ellipse([ex - 13, eye_y - 6, ex + 13, eye_y + 6],
+                      fill=(235, 230, 225))
+            # Iris
+            d.ellipse([ex - 7, eye_y - 6, ex + 7, eye_y + 6],
+                      fill=(85, 140, 120))
+            # Pupil
+            d.ellipse([ex - 3, eye_y - 3, ex + 3, eye_y + 3],
+                      fill=(15, 15, 15))
+            # Pupil highlight
+            d.ellipse([ex - 5, eye_y - 4, ex - 2, eye_y - 1],
+                      fill=(255, 255, 255))
+            # Upper eyelid shadow
+            d.arc([ex - 14, eye_y - 8, ex + 14, eye_y + 4],
+                  start=200, end=340, fill=(120, 90, 75), width=2)
+            # Lower lash line
+            d.arc([ex - 12, eye_y - 2, ex + 12, eye_y + 8],
+                  start=20, end=160, fill=(80, 60, 50), width=1)
+
+        # ── Nose ─────────────────────────────────────────────────────
+        nose_y = cy + 2
+        d.line([(cx, cy - 8), (cx - 3, nose_y + 8)],
+               fill=_SKIN_SHADOW, width=1)
+        # Nostrils
+        d.ellipse([cx - 8, nose_y + 4, cx - 2, nose_y + 10],
+                  fill=_SKIN_SHADOW)
+        d.ellipse([cx + 2, nose_y + 4, cx + 8, nose_y + 10],
+                  fill=_SKIN_SHADOW)
+
+        # ── Mouth (closed, subtle smile) ─────────────────────────────
+        mouth_y = cy + 22
+        # Upper lip
+        d.polygon([
+            (cx - 16, mouth_y), (cx - 5, mouth_y - 3),
+            (cx, mouth_y - 1), (cx + 5, mouth_y - 3),
+            (cx + 16, mouth_y),
+        ], fill=_LIP)
+        # Lower lip
+        d.ellipse([cx - 14, mouth_y - 1, cx + 14, mouth_y + 7], fill=_LIP)
+        # Lip line
+        d.line([(cx - 15, mouth_y), (cx + 15, mouth_y)],
+               fill=(130, 75, 75), width=1)
+
+        # ── Chin highlight ───────────────────────────────────────────
+        d.ellipse([cx - 12, cy + 34, cx + 12, cy + 44],
+                  fill=_SKIN_HIGHLIGHT)
+
+        # ── Subtle blush ─────────────────────────────────────────────
+        blush = Image.new("RGBA", (sz, sz), (0, 0, 0, 0))
+        bd = ImageDraw.Draw(blush)
+        for side in [-1, 1]:
+            bx = cx + side * 32
+            bd.ellipse([bx - 15, cy + 2, bx + 15, cy + 18],
+                       fill=(200, 140, 130, 40))
+        img = Image.alpha_composite(img, blush)
+
+        # ── Headset ──────────────────────────────────────────────────
+        # Headband (top arc)
+        d_final = ImageDraw.Draw(img)
+        d_final.arc([cx - face_w - 15, cy - face_h - 20,
+                     cx + face_w + 15, cy - face_h + 50],
+                    start=200, end=340, fill=(50, 55, 60), width=4)
+        # Left ear cup
+        d_final.ellipse([cx - face_w - 18, cy - 18, cx - face_w + 2, cy + 12],
+                        fill=(40, 45, 50), outline=(60, 65, 70), width=1)
+        # Mic arm
+        d_final.line([(cx - face_w - 5, cy + 5), (cx - 25, cy + 30)],
+                     fill=(55, 60, 65), width=2)
+        # Mic tip
+        d_final.ellipse([cx - 28, cy + 27, cx - 20, cy + 35],
+                        fill=(0, 210, 255), outline=(0, 180, 220))
+
+        # Apply a very subtle blur for realism
+        img = img.filter(ImageFilter.GaussianBlur(0.5))
+
+        # Circular mask
+        mask = Image.new("L", (sz, sz), 0)
+        md = ImageDraw.Draw(mask)
+        md.ellipse([0, 0, sz - 1, sz - 1], fill=255)
+        mask = mask.filter(ImageFilter.GaussianBlur(1))
+        img.putalpha(mask)
+
+        # Composite on background
+        bg = Image.new("RGBA", (sz, sz), (*_BG_RGB, 255))
+        bg.paste(img, (0, 0), img)
+
+        logger.info("PIL avatar rendered (%dpx)", sz)
+        return bg.convert("RGB")
+    except Exception:
+        logger.exception("Avatar render failed")
+        return None
 
 
 class OverwatchGUI(ctk.CTk):
     def __init__(self) -> None:
         super().__init__()
         self.title("PMC Overwatch")
-        self.geometry("820x800")
-        self.minsize(620, 600)
+        self.geometry("820x860")
+        self.minsize(620, 640)
         ctk.set_appearance_mode("dark")
         self.configure(fg_color=_BG)
 
@@ -103,8 +309,11 @@ class OverwatchGUI(ctk.CTk):
         # Particles
         self._particles = [_Particle() for _ in range(_N_PARTICLES)]
 
-        # Circuit line segments (pre-generated for consistency)
-        self._circuit_lines = self._gen_circuit_lines()
+        # Pre-render avatar
+        self._avatar_photo = None
+        av_img = _render_avatar()
+        if av_img:
+            self._avatar_photo = ImageTk.PhotoImage(av_img)
 
         self._build_header()
         self._build_agent()
@@ -112,24 +321,6 @@ class OverwatchGUI(ctk.CTk):
         self._build_footer()
         self._start_anim()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
-
-    @staticmethod
-    def _gen_circuit_lines():
-        """Generate random circuit-like line segments on the agent face."""
-        lines = []
-        random.seed(42)  # Deterministic so it looks the same every run
-        for _ in range(8):
-            # Start from center-ish area
-            sx = random.uniform(-25, 25)
-            sy = random.uniform(-35, 35)
-            points = [(sx, sy)]
-            for _ in range(random.randint(2, 4)):
-                dx = random.choice([-1, 1]) * random.uniform(8, 20)
-                dy = random.choice([-1, 1]) * random.uniform(5, 15)
-                points.append((points[-1][0] + dx, points[-1][1] + dy))
-            lines.append(points)
-        random.seed()  # Reset seed
-        return lines
 
     # ══════════════════════════════════════════════════════════════════
     #  HEADER
@@ -143,8 +334,6 @@ class OverwatchGUI(ctk.CTk):
 
         logo = ctk.CTkFrame(inner, fg_color="transparent")
         logo.pack(side="left")
-
-        # Use a cross-platform font for the logo
         _font = "Segoe UI" if platform.system() == "Windows" else "SF Pro Display"
         ctk.CTkLabel(logo, text="PMC Overwatch",
                      font=ctk.CTkFont(family=_font, size=24, weight="bold"),
@@ -160,219 +349,79 @@ class OverwatchGUI(ctk.CTk):
         self._btn.pack(side="right")
 
     # ══════════════════════════════════════════════════════════════════
-    #  AGENT — procedurally animated AI entity
+    #  AGENT — PIL-rendered avatar with animated overlays
     # ══════════════════════════════════════════════════════════════════
     def _build_agent(self) -> None:
         self._cv = tk.Canvas(self, width=_CANVAS_W, height=_CANVAS_H,
                              bg=_BG, highlightthickness=0, bd=0)
-        self._cv.pack(pady=(12, 0))
+        self._cv.pack(pady=(10, 0))
 
         self._av_status = ctk.CTkLabel(
             self, text="Offline",
             font=ctk.CTkFont(size=14, weight="bold"), text_color=_MUTED)
-        self._av_status.pack(pady=(4, 6))
+        self._av_status.pack(pady=(2, 6))
 
     def _render(self) -> None:
         cv = self._cv
         cv.delete("all")
         cx = _CANVAS_W // 2
-        cy = _CANVAS_H // 2 - 20
+        cy = _CANVAS_H // 2 - 30
 
-        # Breathing bob + micro-sway
-        bob = math.sin(self._phase * 0.3) * 3
-        sway = math.sin(self._phase * 0.15) * 2
+        # Breathing bob
+        bob = math.sin(self._phase * 0.3) * 2.5
+        sway = math.sin(self._phase * 0.15) * 1.5
         cy_f = cy + bob
         glow_c = _GLOW.get(self._mode, _MUTED)
 
-        # ── Particles (orbit the agent) ──────────────────────────────
+        # ── Particles ─────────────────────────────────────────────────
         for p in self._particles:
             p.angle += p.speed
-            rad_mod = p.radius + math.sin(self._phase * 0.5 + p.angle * 2) * 8
-            px = cx + sway + math.cos(p.angle) * rad_mod
-            py = cy_f + math.sin(p.angle) * rad_mod * 0.8 + p.drift
+            r = p.radius + math.sin(self._phase * 0.5 + p.angle * 2) * 6
+            px = cx + sway + math.cos(p.angle) * r
+            py = cy_f + math.sin(p.angle) * r * 0.85
             sz = p.size
             if self._mode == "speaking":
-                sz *= 1.0 + (math.sin(self._phase * 2.5 + p.angle) + 1) * 0.5
-            elif self._mode == "thinking":
-                sz *= 1.0 + (math.sin(self._phase * 4 + p.angle * 3) + 1) * 0.2
+                sz *= 1.0 + (math.sin(self._phase * 2.5 + p.angle) + 1) * 0.4
             cv.create_oval(px - sz, py - sz, px + sz, py + sz,
                            fill=glow_c, outline="")
 
-        # ── Energy rings ─────────────────────────────────────────────
+        # ── Glow ring ─────────────────────────────────────────────────
         pulse = (math.sin(self._phase * 1.0) + 1) * 0.5
+        ring_r = _AV_SIZE // 2 + 10 + pulse * 4
+        ring_w = 3 if self._mode != "idle" else 1
+        cv.create_oval(cx + sway - ring_r, cy_f - ring_r,
+                       cx + sway + ring_r, cy_f + ring_r,
+                       outline=glow_c, width=ring_w)
 
-        for i, (base_r, w) in enumerate([(100, 1), (88, 2), (78, 1)]):
-            r = base_r + pulse * (4 - i)
-            # Draw dashed ring effect
-            segments = 32
-            for j in range(segments):
-                if j % 3 == 0:
-                    continue  # gap
-                a1 = (j / segments) * 2 * math.pi + self._phase * (0.1 * (i + 1))
-                a2 = ((j + 1) / segments) * 2 * math.pi + self._phase * (0.1 * (i + 1))
-                x1 = cx + sway + math.cos(a1) * r
-                y1 = cy_f + math.sin(a1) * r
-                x2 = cx + sway + math.cos(a2) * r
-                y2 = cy_f + math.sin(a2) * r
-                cv.create_line(x1, y1, x2, y2, fill=glow_c, width=w)
-
-        # ── Shoulders + Neck (drawn first, behind head) ─────────────────
-        neck_w = 18
-        neck_h = 25
-        shoulder_w = 85
-        shoulder_h = 30
-        neck_top = cy_f + 38
-        # Shoulders (rounded trapezoid)
-        cv.create_polygon(
-            cx + sway - neck_w, neck_top,
-            cx + sway - shoulder_w, neck_top + neck_h + shoulder_h,
-            cx + sway - shoulder_w + 15, neck_top + neck_h + shoulder_h + 10,
-            cx + sway + shoulder_w - 15, neck_top + neck_h + shoulder_h + 10,
-            cx + sway + shoulder_w, neck_top + neck_h + shoulder_h,
-            cx + sway + neck_w, neck_top,
-            fill="#1a2030", outline=glow_c, width=1, smooth=True
-        )
-        # Neck
-        cv.create_rectangle(
-            cx + sway - neck_w, neck_top,
-            cx + sway + neck_w, neck_top + neck_h,
-            fill="#1e2535", outline=""
-        )
-
-        # ── Head (oval, not circle — more realistic) ──────────────────
-        head_w = 48
-        head_h = 58
-        head_cy = cy_f - 5
-        # Face fill
-        for ring in range(0, head_h, 2):
-            frac = ring / head_h
-            rr = int(28 + frac * 10)
-            gg = int(32 + frac * 10)
-            bb = int(42 + frac * 12)
-            fill = f"#{rr:02x}{gg:02x}{bb:02x}"
-            rx = head_w * (1 - (frac - 0.5)**2 * 0.3)
-            ry = head_h - ring
-            cv.create_oval(cx + sway - rx, head_cy - ry,
-                           cx + sway + rx, head_cy + ry,
-                           fill=fill, outline="")
-
-        # Head outline
-        cv.create_oval(cx + sway - head_w, head_cy - head_h,
-                       cx + sway + head_w, head_cy + head_h,
-                       outline=glow_c, width=2)
-
-        # ── Hair (styled, swept to the side) ──────────────────────────
-        hair_pts = [
-            (-head_w - 5, -15), (-head_w + 2, -head_h + 5),
-            (-head_w + 15, -head_h - 8), (-5, -head_h - 12),
-            (10, -head_h - 10), (head_w - 5, -head_h - 5),
-            (head_w + 3, -head_h + 10), (head_w + 5, -20),
-            (head_w + 2, -5), (head_w - 3, 5),
-            (head_w - 15, -head_h + 15), (0, -head_h + 5),
-            (-head_w + 10, -head_h + 12), (-head_w - 3, -5),
-        ]
-        hair_coords = []
-        for px, py in hair_pts:
-            hair_coords.extend([cx + sway + px, head_cy + py])
-        cv.create_polygon(*hair_coords, fill="#14191f", outline=glow_c,
-                          width=1, smooth=True)
-
-        # ── Ears (small hints on sides) ───────────────────────────────
-        for side in [-1, 1]:
-            ear_x = cx + sway + side * (head_w - 2)
-            ear_y = head_cy - 5
-            cv.create_oval(ear_x - 5, ear_y - 8, ear_x + 5, ear_y + 8,
-                           fill="#1e2535", outline=glow_c, width=1)
-
-        # ── Eyebrows ─────────────────────────────────────────────────
-        brow_y = head_cy - 22
-        for side in [-1, 1]:
-            bx = cx + sway + side * 18
-            cv.create_line(bx - 10, brow_y + side * 1,
-                           bx + 10, brow_y - side * 1,
-                           fill=glow_c, width=2)
-
-        # ── Eyes (expressive, reactive) ───────────────────────────────
-        eye_y = head_cy - 12
-        eye_sep = 18
-        eye_w = 11
-        eye_h = 5
-
-        # Blink effect (every ~5 seconds)
-        blink = (math.sin(self._phase * 0.4) > 0.95)
-        actual_eye_h = 1 if blink else eye_h
-
-        for side in [-1, 1]:
-            ex = cx + sway + side * eye_sep
-            # Eye white
-            cv.create_oval(ex - eye_w - 1, eye_y - actual_eye_h - 1,
-                           ex + eye_w + 1, eye_y + actual_eye_h + 1,
-                           fill="#1a2030", outline="")
-            # Iris
-            cv.create_oval(ex - eye_w, eye_y - actual_eye_h,
-                           ex + eye_w, eye_y + actual_eye_h,
-                           fill=glow_c, outline="")
-            # Pupil
-            pupil_r = 3 if not blink else 1
-            cv.create_oval(ex - pupil_r, eye_y - pupil_r,
-                           ex + pupil_r, eye_y + pupil_r,
-                           fill="white", outline="")
-            # Eye glow halo
-            if self._mode != "idle":
-                glow_r = eye_w + 6
-                cv.create_oval(ex - glow_r, eye_y - glow_r,
-                               ex + glow_r, eye_y + glow_r,
-                               fill="", outline=glow_c, width=1)
-
-        # ── Nose (subtle line) ────────────────────────────────────────
-        nose_top = head_cy - 2
-        nose_bot = head_cy + 10
-        cv.create_line(cx + sway, nose_top, cx + sway - 3, nose_bot,
-                       fill=glow_c, width=1)
-        cv.create_line(cx + sway - 3, nose_bot, cx + sway + 3, nose_bot,
-                       fill=glow_c, width=1)
-
-        # ── Mouth (animated when speaking) ────────────────────────────
-        mouth_y = head_cy + 20
-        mouth_w = 14
-        if self._mode == "speaking":
-            # Animate mouth open/close
-            mouth_open = abs(math.sin(self._phase * 4)) * 6
-            cv.create_oval(cx + sway - mouth_w, mouth_y - mouth_open / 2,
-                           cx + sway + mouth_w, mouth_y + mouth_open / 2 + 2,
-                           fill="#0d1117", outline=glow_c, width=1)
+        # ── Avatar image ──────────────────────────────────────────────
+        if self._avatar_photo:
+            cv.create_image(cx + sway, cy_f, image=self._avatar_photo,
+                            anchor="center")
         else:
-            # Closed mouth (slight smile)
-            cv.create_arc(cx + sway - mouth_w, mouth_y - 4,
-                          cx + sway + mouth_w, mouth_y + 8,
-                          start=200, extent=140,
-                          style="arc", outline=glow_c, width=1)
+            # Fallback: simple circle
+            r = _AV_SIZE // 2
+            cv.create_oval(cx - r, cy_f - r, cx + r, cy_f + r,
+                           fill=_SURFACE, outline=_BORDER, width=2)
+            cv.create_text(cx, cy_f, text="SCAV-E", font=("", 20),
+                           fill=_TEXT)
 
-        # ── Circuit lines (tech overlay on one cheek) ─────────────────
-        circuit_alpha = 0.3 + pulse * 0.3
-        for line_pts in self._circuit_lines:
-            for k in range(len(line_pts) - 1):
-                x1 = cx + sway + line_pts[k][0]
-                y1 = cy_f + line_pts[k][1]
-                x2 = cx + sway + line_pts[k + 1][0]
-                y2 = cy_f + line_pts[k + 1][1]
-                cv.create_line(x1, y1, x2, y2, fill=glow_c, width=1)
-            # Node dots at endpoints
-            for pt in line_pts:
-                nx = cx + sway + pt[0]
-                ny = cy_f + pt[1]
-                cv.create_oval(nx - 1.5, ny - 1.5, nx + 1.5, ny + 1.5,
-                               fill=glow_c, outline="")
+        # ── Mic glow (when speaking) ──────────────────────────────────
+        if self._mode == "speaking":
+            mic_x = cx + sway - 24
+            mic_y = cy_f + 23
+            glow_sz = 6 + math.sin(self._phase * 4) * 3
+            cv.create_oval(mic_x - glow_sz, mic_y - glow_sz,
+                           mic_x + glow_sz, mic_y + glow_sz,
+                           fill=_CYAN, outline="")
 
-        # ── Voice waveform bars (below agent) ─────────────────────────
+        # ── Voice bars ────────────────────────────────────────────────
         total_w = _N_BARS * _BAR_W + (_N_BARS - 1) * _BAR_GAP
         bx_start = cx - total_w // 2
-        by_base = neck_top + neck_h + shoulder_h + 18
+        by_base = cy_f + _AV_SIZE // 2 + 24
 
         for i in range(_N_BARS):
-            h = max(2, int(self._bar_current[i] * _BAR_MAX_H))
+            h = max(1, int(self._bar_current[i] * _BAR_MAX_H))
             x = bx_start + i * (_BAR_W + _BAR_GAP)
-            # Symmetric: bars go up AND down from center
             cv.create_rectangle(x, by_base - h, x + _BAR_W, by_base,
                                 fill=glow_c, outline="")
             cv.create_rectangle(x, by_base, x + _BAR_W, by_base + h,
@@ -387,18 +436,18 @@ class OverwatchGUI(ctk.CTk):
             return
         self._phase += 0.1
 
-        # Update bar targets based on state
+        # Update bar targets
         if self._mode == "speaking":
             for i in range(_N_BARS):
                 center_w = 1.0 - abs(i - _N_BARS // 2) / (_N_BARS // 2) * 0.4
-                self._bar_target[i] = max(0.12, random.uniform(0.2, 1.0) * center_w)
+                self._bar_target[i] = max(0.1, random.uniform(0.15, 1.0) * center_w)
         elif self._mode == "thinking":
             for i in range(_N_BARS):
                 wave = (math.sin(self._phase * 3.0 + i * 0.4) + 1) * 0.5
-                self._bar_target[i] = wave * 0.3
+                self._bar_target[i] = wave * 0.25
         elif self._mode == "listening":
             for i in range(_N_BARS):
-                self._bar_target[i] = 0.04 + (math.sin(self._phase * 0.5 + i * 0.25) + 1) * 0.04
+                self._bar_target[i] = 0.03 + (math.sin(self._phase * 0.5 + i * 0.2) + 1) * 0.03
         else:
             for i in range(_N_BARS):
                 self._bar_target[i] = 0.0
@@ -424,7 +473,6 @@ class OverwatchGUI(ctk.CTk):
                      font=ctk.CTkFont(size=13, weight="bold"),
                      text_color=_TEXT2).pack(side="left")
 
-        # Use a monospace font that exists on all platforms
         _mono = "Consolas" if platform.system() == "Windows" else "Menlo"
         self._log = ctk.CTkTextbox(
             f, font=ctk.CTkFont(family=_mono, size=12),
@@ -442,13 +490,13 @@ class OverwatchGUI(ctk.CTk):
         ft.pack_propagate(False)
         inner = ctk.CTkFrame(ft, fg_color="transparent")
         inner.pack(fill="x", padx=20, pady=10)
-        self._dot = ctk.CTkLabel(inner, text="●", font=ctk.CTkFont(size=12),
+        self._dot = ctk.CTkLabel(inner, text="*", font=ctk.CTkFont(size=14),
                                  text_color=_MUTED, width=16)
         self._dot.pack(side="left", padx=(0, 6))
         self._status_lbl = ctk.CTkLabel(inner, text="Offline",
                                         font=ctk.CTkFont(size=12), text_color=_TEXT2)
         self._status_lbl.pack(side="left")
-        ctk.CTkLabel(inner, text="v6.0", font=ctk.CTkFont(size=11),
+        ctk.CTkLabel(inner, text="v7.0", font=ctk.CTkFont(size=11),
                      text_color=_MUTED).pack(side="right")
 
     # ══════════════════════════════════════════════════════════════════

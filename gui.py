@@ -1,15 +1,13 @@
 """
-PMC Overwatch GUI — dynamic animated avatar with continuous motion.
+PMC Overwatch GUI — Sprite-based animated avatar with real facial expressions.
 
-Design:
-  * Pre-renders 24 animation frames from base avatar with PIL transforms:
-    - Head tilt (left/right shift)
-    - Breathing zoom (subtle scale)
-    - Light temperature shifts (warm/cool tints)
-    - Eye look direction shifts
-  * Blink frames, speaking frames with mouth glow
-  * Holographic scan-line overlay effect
-  * Smooth 24fps animation with state-reactive effects
+Design (VTuber / Visual Novel style):
+  * 6 expression sprites: neutral, talk_a, talk_b, blink, think + original
+  * Speaking: cycles through mouth-open sprites (like real lip-sync)
+  * Blinking: swaps to blink sprite every 3-6s for ~180ms
+  * Thinking: shows thinking expression sprite
+  * Listening: subtle idle animation with neutral expression
+  * Head micro-motion via PIL crop offset (±2px, continuous)
 """
 
 import logging
@@ -20,20 +18,28 @@ import threading
 import tkinter as tk
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Dict, List, Optional
 
 import customtkinter as ctk
 
 logger = logging.getLogger(__name__)
 
 try:
-    from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageTk
+    from PIL import Image, ImageDraw, ImageFilter, ImageTk
     _HAS_PIL = True
 except ImportError:
     _HAS_PIL = False
 
-# ── Avatar asset path ────────────────────────────────────────────────
-_AVATAR_PATH = Path(__file__).parent / "assets" / "avatar.png"
+# ── Asset paths ──────────────────────────────────────────────────────
+_ASSETS = Path(__file__).parent / "assets"
+_SPRITE_FILES = {
+    "neutral": _ASSETS / "neutral.png",
+    "talk_a": _ASSETS / "talk_a.png",
+    "talk_b": _ASSETS / "talk_b.png",
+    "blink": _ASSETS / "blink.png",
+    "think": _ASSETS / "think.png",
+    "avatar": _ASSETS / "avatar.png",  # fallback / listen
+}
 
 # ── Palette ──────────────────────────────────────────────────────────
 _BG = "#0a0e14"
@@ -52,11 +58,11 @@ _MUTED = "#3d4450"
 _BORDER = "#252b35"
 
 # Sizing
-_AV_SIZE = 220
-_CANVAS_W = 360
-_CANVAS_H = 360
+_AV_SIZE = 240
+_CANVAS_W = 380
+_CANVAS_H = 380
 _FPS = 24
-_ANIM_FRAMES = 24  # Total pre-rendered motion frames
+_MOTION_STEPS = 32  # frames per head-motion cycle
 
 # Voice bars
 _N_BARS = 29
@@ -64,7 +70,7 @@ _BAR_W = 3
 _BAR_GAP = 1
 _BAR_MAX_H = 16
 
-# Glow
+# Glow per state
 _GLOW = {"idle": _MUTED, "listening": _GREEN, "thinking": _AMBER, "speaking": _CYAN}
 _GLOW_RGB = {
     "idle": (61, 68, 80), "listening": (0, 210, 106),
@@ -72,145 +78,108 @@ _GLOW_RGB = {
 }
 
 # Particles
-_N_PARTICLES = 16
+_N_PARTICLES = 14
 
 
 class _Particle:
     __slots__ = ("angle", "radius", "speed", "size")
     def __init__(self):
         self.angle = random.uniform(0, 2 * math.pi)
-        self.radius = random.uniform(118, 148)
-        self.speed = random.uniform(0.004, 0.012)
-        self.size = random.uniform(1.0, 2.4)
+        self.radius = random.uniform(126, 158)
+        self.speed = random.uniform(0.003, 0.010)
+        self.size = random.uniform(1.0, 2.2)
 
 
-def _make_circular(img: "Image.Image") -> "Image.Image":
-    """Apply circular mask with anti-aliased edge."""
+def _load_sprite(path: Path, size: int) -> Optional["Image.Image"]:
+    """Load a sprite, resize, and return as RGBA PIL image."""
+    if not _HAS_PIL or not path.exists():
+        return None
+    try:
+        img = Image.open(path).convert("RGBA")
+        img = img.resize((size + 16, size + 16), Image.Resampling.LANCZOS)
+        return img
+    except Exception:
+        logger.exception("Failed to load sprite: %s", path.name)
+        return None
+
+
+def _apply_circular_mask(img: "Image.Image", size: int) -> "Image.Image":
+    """Crop center, apply circular mask, composite on dark bg."""
+    # Crop center region
     w, h = img.size
-    mask = Image.new("L", (w, h), 0)
+    left = (w - size) // 2
+    top = (h - size) // 2
+    cropped = img.crop((left, top, left + size, top + size))
+
+    mask = Image.new("L", (size, size), 0)
     d = ImageDraw.Draw(mask)
-    d.ellipse([3, 3, w - 4, h - 4], fill=255)
+    d.ellipse([3, 3, size - 4, size - 4], fill=255)
     mask = mask.filter(ImageFilter.GaussianBlur(1.5))
-    img = img.copy()
-    img.putalpha(mask)
-    bg = Image.new("RGBA", (w, h), (*_BG_RGB, 255))
-    bg.paste(img, (0, 0), img)
+    cropped.putalpha(mask)
+
+    bg = Image.new("RGBA", (size, size), (*_BG_RGB, 255))
+    bg.paste(cropped, (0, 0), cropped)
     return bg.convert("RGB")
 
 
-def _prepare_all_frames():
-    """Pre-render multiple animation frames with PIL transforms."""
-    if not _HAS_PIL or not _AVATAR_PATH.exists():
-        return [], [], []
+def _prepare_sprites():
+    """Load all expression sprites and create motion-shifted variants."""
+    sprites: Dict[str, "Image.Image"] = {}
+    for name, path in _SPRITE_FILES.items():
+        img = _load_sprite(path, _AV_SIZE)
+        if img:
+            sprites[name] = img
+            logger.info("Loaded sprite: %s (%s)", name, path.name)
 
-    try:
-        raw = Image.open(_AVATAR_PATH).convert("RGBA")
-        # Work at slightly larger size for crop transforms
-        work_size = _AV_SIZE + 20
-        raw = raw.resize((work_size, work_size), Image.Resampling.LANCZOS)
+    if not sprites:
+        return {}, []
 
-        motion_frames = []  # 24 frames: head tilt + zoom + light
-        blink_frames = []   # 3 blink stages
-        speak_frames = []   # 4 speaking variations
+    # Create motion-shifted frames from 'neutral' or 'avatar' base
+    base = sprites.get("neutral", sprites.get("avatar"))
+    motion_frames: List["ImageTk.PhotoImage"] = []
+    if base:
+        for i in range(_MOTION_STEPS):
+            t = i / _MOTION_STEPS * 2 * math.pi
+            dx = int(math.sin(t) * 2)  # ±2px head tilt
+            dy = int(math.sin(t * 0.5) * 1.5)  # ±1.5px breathing
 
-        cx, cy = work_size // 2, work_size // 2
-        half = _AV_SIZE // 2
+            w, h = base.size
+            cx, cy = w // 2, h // 2
+            half = _AV_SIZE // 2
 
-        # ── Motion frames: continuous head/breathing cycle ────────────
-        for i in range(_ANIM_FRAMES):
-            t = i / _ANIM_FRAMES * 2 * math.pi
+            left = max(0, cx - half + dx)
+            top = max(0, cy - half + dy)
+            right = min(w, left + _AV_SIZE)
+            bottom = min(h, top + _AV_SIZE)
 
-            # Head tilt: shift image left/right by up to 3px
-            dx = int(math.sin(t) * 3)
-            # Breathing: slight vertical shift
-            dy = int(math.sin(t * 0.5) * 2)
-            # Zoom: subtle 1-2% scale variation
-            zoom = 1.0 + math.sin(t * 0.5) * 0.015
+            frame = base.crop((left, top, right, bottom))
+            if frame.size != (_AV_SIZE, _AV_SIZE):
+                frame = frame.resize((_AV_SIZE, _AV_SIZE), Image.Resampling.LANCZOS)
 
-            # Light temperature: subtle warm/cool shift
-            temp_shift = math.sin(t * 0.3) * 0.03  # ±3% brightness
+            motion_frames.append(
+                ImageTk.PhotoImage(_apply_circular_mask(
+                    frame.resize((_AV_SIZE + 16, _AV_SIZE + 16), Image.Resampling.LANCZOS),
+                    _AV_SIZE
+                ))
+            )
 
-            # Crop with offset for head tilt effect
-            left = cx - int(half / zoom) + dx
-            top = cy - int(half / zoom) + dy
-            right = cx + int(half / zoom) + dx
-            bottom = cy + int(half / zoom) + dy
+    # Pre-render expression PhotoImages
+    expr_photos: Dict[str, "ImageTk.PhotoImage"] = {}
+    for name, img in sprites.items():
+        expr_photos[name] = ImageTk.PhotoImage(_apply_circular_mask(img, _AV_SIZE))
 
-            # Clamp crop bounds
-            left = max(0, left)
-            top = max(0, top)
-            right = min(work_size, right)
-            bottom = min(work_size, bottom)
-
-            frame = raw.crop((left, top, right, bottom))
-            frame = frame.resize((_AV_SIZE, _AV_SIZE), Image.Resampling.LANCZOS)
-
-            # Apply brightness variation
-            if abs(temp_shift) > 0.005:
-                enhancer = ImageEnhance.Brightness(frame)
-                frame = enhancer.enhance(1.0 + temp_shift)
-                frame = frame.convert("RGBA")
-
-            motion_frames.append(ImageTk.PhotoImage(_make_circular(frame)))
-
-        # ── Blink frames ─────────────────────────────────────────────
-        for alpha in [120, 200, 200]:  # closing, closed, opening
-            bframe = raw.copy()
-            # Crop to standard view
-            left = cx - half
-            top = cy - half
-            bframe = bframe.crop((left, top, left + _AV_SIZE, top + _AV_SIZE))
-            bframe = bframe.resize((_AV_SIZE, _AV_SIZE), Image.Resampling.LANCZOS)
-            bd = ImageDraw.Draw(bframe)
-            eye_y = _AV_SIZE // 2 - 12
-            for side in [-1, 1]:
-                ex = _AV_SIZE // 2 + side * 28
-                bd.ellipse([ex - 16, eye_y - 3, ex + 16, eye_y + 5],
-                           fill=(100, 70, 55, alpha))
-            blink_frames.append(ImageTk.PhotoImage(_make_circular(bframe)))
-
-        # ── Speaking frames ──────────────────────────────────────────
-        for intensity in [0.0, 0.4, 0.8, 0.4]:
-            sframe = raw.copy()
-            left = cx - half
-            top = cy - half
-            sframe = sframe.crop((left, top, left + _AV_SIZE, top + _AV_SIZE))
-            sframe = sframe.resize((_AV_SIZE, _AV_SIZE), Image.Resampling.LANCZOS)
-
-            # Brighten slightly when speaking
-            enhancer = ImageEnhance.Brightness(sframe)
-            sframe = enhancer.enhance(1.0 + intensity * 0.08)
-            sframe = sframe.convert("RGBA")
-
-            # Cyan glow near mouth
-            if intensity > 0:
-                overlay = Image.new("RGBA", (_AV_SIZE, _AV_SIZE), (0, 0, 0, 0))
-                od = ImageDraw.Draw(overlay)
-                mouth_y = _AV_SIZE // 2 + 36
-                glow_alpha = int(intensity * 35)
-                od.ellipse([_AV_SIZE // 2 - 18, mouth_y - 6,
-                            _AV_SIZE // 2 + 18, mouth_y + 6],
-                           fill=(0, 200, 255, glow_alpha))
-                sframe = Image.alpha_composite(sframe, overlay)
-
-            speak_frames.append(ImageTk.PhotoImage(_make_circular(sframe)))
-
-        logger.info(
-            "Avatar frames: %d motion, %d blink, %d speak",
-            len(motion_frames), len(blink_frames), len(speak_frames)
-        )
-        return motion_frames, blink_frames, speak_frames
-
-    except Exception:
-        logger.exception("Avatar frame prep failed")
-        return [], [], []
+    logger.info(
+        "Sprites ready: %d expressions, %d motion frames",
+        len(expr_photos), len(motion_frames)
+    )
+    return expr_photos, motion_frames
 
 
 class OverwatchGUI(ctk.CTk):
     def __init__(self) -> None:
         super().__init__()
         self.title("PMC Overwatch")
-        self.geometry("860x880")
+        self.geometry("860x900")
         self.minsize(640, 660)
         ctk.set_appearance_mode("dark")
         self.configure(fg_color=_BG)
@@ -223,20 +192,20 @@ class OverwatchGUI(ctk.CTk):
         # Animation state
         self._mode = "idle"
         self._phase = 0.0
-        self._frame_idx = 0
         self._anim_id: Optional[str] = None
         self._pulse_id: Optional[str] = None
         self._pulse_vis = True
         self._dot_color = _MUTED
 
-        # Blink state
-        self._blink_cd = random.uniform(3.0, 5.0)
+        # Blink timer
+        self._blink_cd = random.uniform(3.0, 5.5)
         self._blink_timer = 0.0
-        self._blink_frame = -1  # -1 = not blinking
+        self._blink_active = False
+        self._blink_duration = 0.0
 
-        # Speaking state
-        self._speak_frame = 0
-        self._speak_timer = 0.0
+        # Speaking lip-sync
+        self._talk_timer = 0.0
+        self._talk_frame = 0  # 0=neutral, 1=talk_a, 2=talk_b
 
         # Voice bars
         self._bar_target = [0.0] * _N_BARS
@@ -245,8 +214,8 @@ class OverwatchGUI(ctk.CTk):
         # Particles
         self._particles = [_Particle() for _ in range(_N_PARTICLES)]
 
-        # Pre-render all frames
-        self._motion_frames, self._blink_frames, self._speak_frames = _prepare_all_frames()
+        # Load sprites
+        self._expr_photos, self._motion_frames = _prepare_sprites()
 
         self._build_header()
         self._build_agent()
@@ -302,99 +271,99 @@ class OverwatchGUI(ctk.CTk):
 
         # ── Aura rings ────────────────────────────────────────────────
         if self._mode != "idle":
-            pulse = (math.sin(self._phase * 0.6) + 1) * 0.5
+            p = (math.sin(self._phase * 0.6) + 1) * 0.5
             for i in range(3):
-                r = _AV_SIZE // 2 + 16 + i * 14 + pulse * 6
-                alpha = max(0, 50 - i * 18)
-                rc = int(glow_rgb[0] * alpha / 255)
-                gc = int(glow_rgb[1] * alpha / 255)
-                bc = int(glow_rgb[2] * alpha / 255)
+                r = _AV_SIZE // 2 + 14 + i * 12 + p * 5
+                a = max(0, 45 - i * 16)
+                rc = int(glow_rgb[0] * a / 255)
+                gc = int(glow_rgb[1] * a / 255)
+                bc = int(glow_rgb[2] * a / 255)
                 c = f"#{max(10, rc):02x}{max(14, gc):02x}{max(20, bc):02x}"
                 cv.create_oval(cx - r, cy - r, cx + r, cy + r, outline=c, width=2)
 
         # ── Particles ─────────────────────────────────────────────────
-        for p in self._particles:
-            p.angle += p.speed
-            r = p.radius + math.sin(self._phase * 0.4 + p.angle * 2) * 6
-            px = cx + math.cos(p.angle) * r
-            py = cy + math.sin(p.angle) * r * 0.85
-            sz = p.size
+        for pt in self._particles:
+            pt.angle += pt.speed
+            r = pt.radius + math.sin(self._phase * 0.4 + pt.angle * 2) * 5
+            px = cx + math.cos(pt.angle) * r
+            py = cy + math.sin(pt.angle) * r * 0.85
+            sz = pt.size
             if self._mode == "speaking":
-                sz *= 1.3 + math.sin(self._phase * 3 + p.angle) * 0.4
+                sz *= 1.2 + math.sin(self._phase * 3 + pt.angle) * 0.3
             cv.create_oval(px - sz, py - sz, px + sz, py + sz,
                            fill=glow_c, outline="")
 
-        # ── Select avatar frame ──────────────────────────────────────
+        # ══════════════════════════════════════════════════════════════
+        #  SPRITE SELECTION (real facial expressions)
+        # ══════════════════════════════════════════════════════════════
         photo = None
 
-        # Blink logic
+        # --- Blink ---
         self._blink_timer += dt
-        if self._blink_frame >= 0:
-            # Currently blinking
-            if self._blink_frame < len(self._blink_frames):
-                photo = self._blink_frames[self._blink_frame]
-            self._blink_timer += dt
-            if self._blink_timer > 0.06:  # 60ms per blink frame
-                self._blink_frame += 1
-                self._blink_timer = 0
-            if self._blink_frame >= len(self._blink_frames):
-                self._blink_frame = -1
+        if self._blink_active:
+            self._blink_duration += dt
+            if self._blink_duration < 0.18:  # 180ms blink
+                photo = self._expr_photos.get("blink")
+            else:
+                self._blink_active = False
+                self._blink_duration = 0.0
+                self._blink_timer = 0.0
                 self._blink_cd = random.uniform(3.0, 6.0)
-        elif self._blink_timer > self._blink_cd:
-            self._blink_frame = 0
-            self._blink_timer = 0
+        elif self._blink_timer >= self._blink_cd:
+            self._blink_active = True
+            self._blink_duration = 0.0
 
-        # Speaking frames (if speaking and not blinking)
-        if self._mode == "speaking" and self._blink_frame < 0 and self._speak_frames:
-            self._speak_timer += dt
-            if self._speak_timer > 0.12:  # Swap every ~120ms
-                self._speak_frame = (self._speak_frame + 1) % len(self._speak_frames)
-                self._speak_timer = 0
-            photo = self._speak_frames[self._speak_frame]
+        # --- Speaking: cycle through mouth sprites ---
+        if self._mode == "speaking" and not self._blink_active:
+            self._talk_timer += dt
+            # Cycle: neutral → talk_a → talk_b → talk_a → neutral → ...
+            # at ~8 swaps/sec for realistic lip movement
+            if self._talk_timer > 0.12:
+                self._talk_frame = (self._talk_frame + 1) % 4
+                self._talk_timer = 0.0
 
-        # Default: motion frame (continuous head movement cycle)
-        if photo is None and self._motion_frames:
-            self._frame_idx = int(self._phase * 2.0) % len(self._motion_frames)
-            photo = self._motion_frames[self._frame_idx]
+            talk_seq = ["neutral", "talk_a", "talk_b", "talk_a"]
+            sprite_name = talk_seq[self._talk_frame]
+            photo = self._expr_photos.get(sprite_name)
 
-        # Draw avatar
-        if photo:
+        # --- Thinking: thinking expression ---
+        elif self._mode == "thinking" and not self._blink_active:
+            photo = self._expr_photos.get("think")
+
+        # --- Listening/Idle: motion frames (subtle head movement) ---
+        if photo is None and not self._blink_active:
+            if self._motion_frames:
+                idx = int(self._phase * 1.5) % len(self._motion_frames)
+                # Use motion frame (continuous head micro-movement)
+                cv.create_image(cx, cy, image=self._motion_frames[idx], anchor="center")
+                photo = None  # Skip the photo draw below
+            else:
+                photo = self._expr_photos.get("neutral", self._expr_photos.get("avatar"))
+
+        # Draw the expression sprite
+        if photo is not None:
             cv.create_image(cx, cy, image=photo, anchor="center")
-        else:
-            r = _AV_SIZE // 2
-            cv.create_oval(cx - r, cy - r, cx + r, cy + r,
-                           fill=_SURFACE, outline=glow_c, width=2)
-            cv.create_text(cx, cy, text="SCAV-E",
-                           font=("Segoe UI", 18, "bold"), fill=_TEXT)
 
-        # ── Glow ring ─────────────────────────────────────────────────
+        # ── Glow border ring ──────────────────────────────────────────
         pulse = (math.sin(self._phase * 0.8) + 1) * 0.5
-        ring_r = _AV_SIZE // 2 + 4 + pulse * 3
+        ring_r = _AV_SIZE // 2 + 3 + pulse * 2
         ring_w = 3 if self._mode != "idle" else 1
-        cv.create_oval(cx - ring_r, cy - ring_r,
-                       cx + ring_r, cy + ring_r,
+        cv.create_oval(cx - ring_r, cy - ring_r, cx + ring_r, cy + ring_r,
                        outline=glow_c, width=ring_w)
 
-        # ── Speaking: sound wave ripples ──────────────────────────────
+        # ── Speaking: ripple waves ────────────────────────────────────
         if self._mode == "speaking":
             for wi in range(3):
                 wp = self._phase * 2.5 + wi * 2.0
-                wr = _AV_SIZE // 2 + 10 + (wp % 4.0) * 12
+                wr = _AV_SIZE // 2 + 8 + (wp % 4.0) * 10
                 wa = max(0, 1.0 - (wp % 4.0) / 4.0)
                 if wa > 0.05:
-                    rv = int(glow_rgb[0] * wa * 0.6)
-                    gv = int(glow_rgb[1] * wa * 0.6)
-                    bv = int(glow_rgb[2] * wa * 0.6)
+                    rv = int(glow_rgb[0] * wa * 0.5)
+                    gv = int(glow_rgb[1] * wa * 0.5)
+                    bv = int(glow_rgb[2] * wa * 0.5)
                     wc = f"#{max(10, rv):02x}{max(14, gv):02x}{max(20, bv):02x}"
                     cv.create_oval(cx - wr, cy - wr, cx + wr, cy + wr,
                                    outline=wc, width=1)
-
-        # ── Holographic scan line ─────────────────────────────────────
-        if self._mode != "idle":
-            scan_y = cy - _AV_SIZE // 2 + int((self._phase * 40) % _AV_SIZE)
-            cv.create_line(cx - _AV_SIZE // 2, scan_y,
-                           cx + _AV_SIZE // 2, scan_y,
-                           fill=glow_c, width=1, stipple="gray25")
 
         # ── Voice bars ────────────────────────────────────────────────
         total_w = _N_BARS * _BAR_W + (_N_BARS - 1) * _BAR_GAP
@@ -415,7 +384,7 @@ class OverwatchGUI(ctk.CTk):
             return
         self._phase += 0.1
 
-        # Bar targets
+        # Update bar targets
         if self._mode == "speaking":
             for i in range(_N_BARS):
                 cw = 1.0 - abs(i - _N_BARS // 2) / (_N_BARS // 2) * 0.4
@@ -423,10 +392,10 @@ class OverwatchGUI(ctk.CTk):
         elif self._mode == "thinking":
             for i in range(_N_BARS):
                 w = (math.sin(self._phase * 3.0 + i * 0.3) + 1) * 0.5
-                self._bar_target[i] = w * 0.18
+                self._bar_target[i] = w * 0.15
         elif self._mode == "listening":
             for i in range(_N_BARS):
-                self._bar_target[i] = 0.02 + (math.sin(self._phase * 0.6 + i * 0.15) + 1) * 0.02
+                self._bar_target[i] = 0.02 + (math.sin(self._phase * 0.5 + i * 0.15) + 1) * 0.02
         else:
             for i in range(_N_BARS):
                 self._bar_target[i] = 0.0
@@ -472,7 +441,7 @@ class OverwatchGUI(ctk.CTk):
         self._status_lbl = ctk.CTkLabel(inner, text="Offline",
                                         font=ctk.CTkFont(size=12), text_color=_TEXT2)
         self._status_lbl.pack(side="left")
-        ctk.CTkLabel(inner, text="v10.0", font=ctk.CTkFont(size=11),
+        ctk.CTkLabel(inner, text="v11.0", font=ctk.CTkFont(size=11),
                      text_color=_MUTED).pack(side="right")
 
     # ══════════════════════════════════════════════════════════════════

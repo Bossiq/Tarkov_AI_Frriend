@@ -254,9 +254,9 @@ class VoiceInput:
             model = self._get_whisper_model()
             # language=None enables auto-detection (EN/RU/RO/etc.)
             segments, info = model.transcribe(
-                audio_path, language=None, beam_size=5,
+                audio_path, language=None, beam_size=3,
                 vad_filter=True,
-                vad_parameters=dict(min_silence_duration_ms=500, speech_pad_ms=300),
+                vad_parameters=dict(min_silence_duration_ms=400, speech_pad_ms=250),
             )
             text = " ".join(s.text.strip() for s in segments).strip()
             detected = getattr(info, 'language', 'unknown')

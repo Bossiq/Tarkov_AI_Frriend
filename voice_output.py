@@ -45,7 +45,7 @@ _EDGE_VOICES = {
     "ru": "ru-RU-SvetlanaNeural",
     "ro": "ro-RO-AlinaNeural",
 }
-_EDGE_RATE = "+0%"  # Normal speaking rate
+_EDGE_RATE = "-5%"  # Slightly slower for more natural pacing
 
 # ── Defaults ─────────────────────────────────────────────────────────
 _DEFAULT_VOICE = "af_heart"

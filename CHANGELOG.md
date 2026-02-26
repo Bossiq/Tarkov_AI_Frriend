@@ -2,6 +2,27 @@
 
 All notable changes to PMC Overwatch are documented here.
 
+## [16.0] — 2026-02-26
+
+### Added
+- **Audio-driven lip sync**: RMS amplitude callback (20ms chunks) maps to mouth poses
+- **Emotion detection**: Keyword-based sentiment analysis drives avatar expressions
+- **Push-to-talk**: Three input modes (auto/toggle/push) with configurable hotkey (F4)
+- `pynput` keyboard listener for global PTT hotkey
+- `INPUT_MODE`, `PTT_KEY`, `EDGE_RATE` environment variables
+- Input mode indicator in GUI footer
+
+### Changed
+- Renamed `SCAVESystem` → `PMCOverwatch` to match PMC branding
+- Replaced random mouth cycling with amplitude-driven compositing
+- Improved audio normalization: dynamic range compression with soft-knee
+- Cleaned 60 lines of dead code from `voice_output.py`
+- Updated README with new feature table and architecture diagram
+- Updated `.env.example` with full PTT documentation
+
+### Fixed
+- Dead code (unreachable Kokoro pipeline) removed from `voice_output.py`
+
 ## [Unreleased] — 2026-02-26
 
 ### Added

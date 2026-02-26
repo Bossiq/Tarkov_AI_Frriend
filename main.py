@@ -8,6 +8,11 @@ All background work is coordinated through a shared ``threading.Event``
 (``gui.shutdown_event``) so the app exits cleanly when the window is closed
 or a SIGTERM / SIGINT is received.
 
+Input modes (INPUT_MODE env var):
+  • auto   — continuous VAD listening (default)
+  • toggle — press PTT_KEY to start/stop recording
+  • push   — hold PTT_KEY to record, release to stop
+
 IMPORTANT: No blocking I/O ever touches the Tkinter main thread.
 All heavy work (mic calibration, model loading, transcription, TTS)
 runs on daemon threads.
@@ -30,7 +35,7 @@ from logging_config import setup_logging  # noqa: E402
 
 setup_logging()
 
-from brain import Brain  # noqa: E402
+from brain import Brain, detect_emotion  # noqa: E402
 from gui import OverwatchGUI  # noqa: E402
 from twitch_bot import TwitchBot  # noqa: E402
 from video_capture import VideoCapture  # noqa: E402
@@ -41,7 +46,7 @@ logger = logging.getLogger(__name__)
 
 
 # ── Core System ──────────────────────────────────────────────────────
-class SCAVESystem:
+class PMCOverwatch:
     """Wires together the AI brain, voice I/O, Twitch bot, and GUI."""
 
     def __init__(self, gui: OverwatchGUI) -> None:
@@ -49,19 +54,25 @@ class SCAVESystem:
         self._shutdown = gui.shutdown_event
         self._gui.log("Initializing PMC Overwatch …")
 
-        # ── Components (lightweight init only) ─────────────────────────
+        # Input mode
+        self._input_mode = os.getenv("INPUT_MODE", "auto").lower()
+        self._ptt_key = os.getenv("PTT_KEY", "f4").lower()
+        self._ptt_active = threading.Event()
+        self._ptt_toggle_on = False
+
+        # ── Components ─────────────────────────────────────────────────
         self._vc = VideoCapture()
         self._vi = VoiceInput(shutdown_event=self._shutdown, gui_log=self._gui.log)
         self._vo = VoiceOutput(
             gui_callback=self._gui.log,
             on_speak_start=lambda: self._gui.set_vis_mode("speaking"),
             on_speak_end=lambda: self._gui.set_vis_mode("thinking"),
+            on_amplitude=lambda a: self._gui.set_amplitude(a),
         )
 
         self._brain: Optional[Brain] = None
         self._twitch_bot: Optional[TwitchBot] = None
         self._running = False
-
         self._latest_frame_path = "latest_frame.jpg"
 
         # Hook up GUI toggle
@@ -77,12 +88,16 @@ class SCAVESystem:
         """Load the AI brain on a background thread (avoids GUI freeze)."""
         try:
             self._brain = Brain()
-            self._gui.log(f"[Brain] Online (Ollama: {self._brain._model})")
+            engine = self._brain._engine
+            model = self._brain._model
+            self._gui.log(f"[Brain] Online ({engine}: {model})")
         except ConnectionError as exc:
             self._gui.log(f"[!] {exc}")
             logger.error("Brain init failed: %s", exc)
             self._brain = None
 
+        mode_label = {"auto": "Auto VAD", "toggle": "Toggle (F4)", "push": "PTT (F4)"}
+        self._gui.log(f"Input mode: {mode_label.get(self._input_mode, 'Auto')}")
         self._gui.log("System ready. Click Start to begin.")
 
     # ── Twitch ────────────────────────────────────────────────────────
@@ -122,48 +137,115 @@ class SCAVESystem:
         if is_running:
             if self._brain is None:
                 self._gui.log(
-                    "[!] Cannot start: Ollama is not running. "
-                    "Launch the Ollama app or run: ollama serve"
+                    "[!] Cannot start: Brain is not ready. "
+                    "Check Ollama or Groq API key."
                 )
-                # Reset toggle back to stopped state
                 self._gui.force_toggle_off()
                 self._running = False
                 return
 
-            # Start the listening thread — calibration happens INSIDE it,
-            # NOT on the main thread (prevents UI freeze)
+            # Start the listening thread
             t = threading.Thread(
                 target=self._listening_thread, name="ListenThread", daemon=True
             )
             t.start()
             self._gui.register_thread(t)
 
+            # Start keyboard listener for toggle/push modes
+            if self._input_mode in ("toggle", "push"):
+                self._start_keyboard_listener()
+
+    # ── Keyboard listener (push-to-talk) ─────────────────────────────
+    def _start_keyboard_listener(self) -> None:
+        """Start pynput keyboard listener for PTT modes."""
+        try:
+            from pynput import keyboard
+
+            key_map = {
+                "f1": keyboard.Key.f1, "f2": keyboard.Key.f2,
+                "f3": keyboard.Key.f3, "f4": keyboard.Key.f4,
+                "f5": keyboard.Key.f5, "f6": keyboard.Key.f6,
+                "f7": keyboard.Key.f7, "f8": keyboard.Key.f8,
+                "f9": keyboard.Key.f9, "f10": keyboard.Key.f10,
+                "f11": keyboard.Key.f11, "f12": keyboard.Key.f12,
+            }
+            target_key = key_map.get(self._ptt_key, keyboard.Key.f4)
+
+            def on_press(key):
+                if key == target_key:
+                    if self._input_mode == "push":
+                        self._ptt_active.set()
+                        self._gui.log("[PTT] Recording...")
+                    elif self._input_mode == "toggle":
+                        self._ptt_toggle_on = not self._ptt_toggle_on
+                        if self._ptt_toggle_on:
+                            self._ptt_active.set()
+                            self._gui.log("[PTT] Recording started")
+                        else:
+                            self._ptt_active.clear()
+                            self._gui.log("[PTT] Recording stopped")
+
+            def on_release(key):
+                if key == target_key and self._input_mode == "push":
+                    self._ptt_active.clear()
+
+            listener = keyboard.Listener(
+                on_press=on_press, on_release=on_release
+            )
+            listener.daemon = True
+            listener.start()
+            self._gui.register_thread(listener)
+            logger.info("Keyboard listener started (key=%s, mode=%s)",
+                        self._ptt_key, self._input_mode)
+
+        except ImportError:
+            logger.warning("pynput not installed -- falling back to auto mode")
+            self._input_mode = "auto"
+        except Exception:
+            logger.exception("Failed to start keyboard listener")
+            self._input_mode = "auto"
+
     # ── Listening thread ──────────────────────────────────────────────
     def _listening_thread(self) -> None:
-        """Continuous VAD listening loop running on a background thread.
+        """Continuous listening loop.
 
-        Calibration happens HERE (background thread), NOT on main thread.
+        Supports three modes:
+          auto   — continuous VAD (default)
+          toggle — waits for PTT toggle, then records until toggled off
+          push   — waits for PTT key held, records while held
         """
-        # Calibrate mic on the background thread — this blocks for ~1s
-        # but that's fine because we're NOT on the Tkinter main thread
+        # Calibrate mic
         self._gui.log("[Mic] Calibrating...")
         self._gui.set_status("Calibrating...")
         self._vi.calibrate(gui_log=self._gui.log)
 
         self._gui.log("[Mic] Listening active -- speak to interact.")
         self._gui.set_status("Listening...")
-        logger.info("Listening thread started")
+        logger.info("Listening thread started (mode=%s)", self._input_mode)
 
         while self._running and not self._shutdown.is_set():
             try:
-                self._gui.set_status("Listening...")
+                if self._input_mode in ("toggle", "push"):
+                    # Wait for PTT activation
+                    self._gui.set_status(f"Press {self._ptt_key.upper()} to talk")
+                    self._gui.set_vis_mode("idle")
+                    while not self._ptt_active.is_set():
+                        if not self._running or self._shutdown.is_set():
+                            break
+                        self._ptt_active.wait(timeout=0.2)
+                    if not self._running or self._shutdown.is_set():
+                        break
+                    self._gui.set_status("Listening...")
+                    self._gui.set_vis_mode("listening")
+
                 self._process_interaction(use_audio=True)
+
             except Exception:
                 logger.exception("Error in listening loop")
                 self._gui.log("[!] Listening error -- retrying...")
                 if self._shutdown.wait(timeout=2.0):
                     break
-            # Small pause between listen cycles
+
             if self._shutdown.wait(timeout=0.1):
                 break
 
@@ -173,14 +255,15 @@ class SCAVESystem:
 
     # ── Twitch message handler ────────────────────────────────────────
     async def _on_twitch_message(self, author: str, content: str) -> None:
-        if "scav" in content.lower() or "blyat" in content.lower():
-            prompt = f"User {author} said: '{content}'. Respond to them."
-            self._gui.log(f"[Twitch] {author}: {content}")
-            await asyncio.to_thread(
-                self._process_interaction, text_prompt=prompt
-            )
+        self._gui.log(f"[Twitch] {author}: {content}")
+        thread = threading.Thread(
+            target=self._process_interaction,
+            args=(f"Twitch user {author} says: {content}",),
+            daemon=True,
+        )
+        thread.start()
 
-    # ── Core interaction logic ────────────────────────────────────────
+    # ── Core interaction pipeline ─────────────────────────────────────
     def _process_interaction(
         self,
         text_prompt: Optional[str] = None,
@@ -230,9 +313,26 @@ class SCAVESystem:
         self._gui.log("[Brain] Generating response...")
 
         response_start = time.monotonic()
-        self._vo.speak_streamed(self._brain.stream_sentences(text_prompt))
+
+        # Collect sentences and detect emotion
+        sentences = self._brain.stream_sentences(text_prompt)
+        first_emotion_set = False
+
+        def _sentences_with_emotion():
+            nonlocal first_emotion_set
+            for sentence in sentences:
+                if not first_emotion_set:
+                    emotion = detect_emotion(sentence)
+                    self._gui.set_emotion(emotion)
+                    first_emotion_set = True
+                yield sentence
+
+        self._vo.speak_streamed(_sentences_with_emotion())
         elapsed = time.monotonic() - response_start
         logger.info("Response cycle completed in %.1fs", elapsed)
+
+        # Reset emotion after speaking
+        self._gui.set_emotion("neutral")
 
         # Revert to listening or offline
         if self._running:
@@ -250,7 +350,7 @@ def main() -> None:
     asyncio.set_event_loop(loop)
 
     gui = OverwatchGUI()
-    system = SCAVESystem(gui)
+    system = PMCOverwatch(gui)
 
     # ── Signal handlers for clean CLI shutdown ────────────────────────
     def _signal_handler(signum, frame):

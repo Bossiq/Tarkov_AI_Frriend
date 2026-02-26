@@ -3,6 +3,7 @@
 # Only direct dependencies are listed; transitive deps are managed by pip.
 
 groq
+pynput
 opencv-python
 twitchio<3.0.0
 faster-whisper

@@ -57,6 +57,28 @@ _SYSTEM_INSTRUCTION = (
 # Regex to split accumulated text into complete sentences
 _SENTENCE_END = re.compile(r'(?<=[.!?])\s+')
 
+# Emotion detection patterns
+_HAPPY_WORDS = re.compile(
+    r'\b(haha|hehe|lol|lmao|rofl|nice|awesome|great|love|hell\s+yeah)\b',
+    re.IGNORECASE,
+)
+_CURIOUS_WORDS = re.compile(
+    r'\b(hmm|well|maybe|probably|not\s+sure|depends|interesting|think)\b',
+    re.IGNORECASE,
+)
+
+
+def detect_emotion(text: str) -> str:
+    """Detect emotion from text. Returns 'happy', 'curious', or 'neutral'."""
+    exclamations = text.count("!")
+    questions = text.count("?")
+
+    if exclamations >= 2 or _HAPPY_WORDS.search(text):
+        return "happy"
+    if questions >= 1 or _CURIOUS_WORDS.search(text):
+        return "curious"
+    return "neutral"
+
 
 class Brain:
     """Dual-engine LLM: Groq cloud (primary) + Ollama local (fallback)."""

@@ -41,7 +41,7 @@ class TwitchBot(commands.Bot):
 
     # ── Configuration ─────────────────────────────────────────────────
     def set_system_reference(self, system: object) -> None:
-        """Store a reference to the main SCAVESystem."""
+        """Store a reference to the main PMCOverwatch."""
         self._system_ref = system
 
     def set_callback(self, callback: Callable) -> None:

@@ -8,13 +8,14 @@ Last resort: macOS `say` command
 Features:
   * Auto language detection (Cyrillic → Russian, Romanian chars → Romanian)
   * Neural female voices per language
-  * Async pipeline: pre-synthesizes next sentence while current plays
+  * Real-time amplitude callback for lip-sync animation
   * Text preprocessing for natural speech
 """
 
 import asyncio
 import io
 import logging
+import math
 import os
 import queue
 import re
@@ -45,14 +46,14 @@ _EDGE_VOICES = {
     "ru": "ru-RU-DariyaNeural",
     "ro": "ro-RO-AlinaNeural",
 }
-_EDGE_RATE = "+0%"  # Normal rate for best quality
 
 # ── Defaults ─────────────────────────────────────────────────────────
 _DEFAULT_VOICE = "af_heart"
 _DEFAULT_SPEED = 1.1
 _DEFAULT_LANG = "en-us"
+_DEFAULT_EDGE_RATE = "+0%"
 _SAY_TIMEOUT_S = 30
-_SENTINEL = object()
+_AMPLITUDE_CHUNK_MS = 20  # RMS calculation every 20ms
 
 # ── Language detection patterns ──────────────────────────────────────
 _CYRILLIC = re.compile(r'[\u0400-\u04FF]')
@@ -118,20 +119,23 @@ def _detect_language(text: str) -> str:
 
 
 class VoiceOutput:
-    """Multilingual TTS with edge-tts neural voices, Kokoro fallback."""
+    """Multilingual TTS with edge-tts neural voices, amplitude-driven lip sync."""
 
     def __init__(
         self,
         gui_callback: Optional[Callable[[str], None]] = None,
         on_speak_start: Optional[Callable[[], None]] = None,
         on_speak_end: Optional[Callable[[], None]] = None,
+        on_amplitude: Optional[Callable[[float], None]] = None,
     ) -> None:
         self._gui_callback = gui_callback
         self._on_speak_start = on_speak_start
         self._on_speak_end = on_speak_end
+        self._on_amplitude = on_amplitude
         self._voice = os.getenv("TTS_VOICE", _DEFAULT_VOICE)
         self._speed = float(os.getenv("TTS_SPEED", str(_DEFAULT_SPEED)))
         self._lang = os.getenv("TTS_LANG", _DEFAULT_LANG)
+        self._edge_rate = os.getenv("EDGE_RATE", _DEFAULT_EDGE_RATE)
         self._kokoro = None
         self._kokoro_lock = threading.Lock()
         self._edge_available = False
@@ -170,7 +174,52 @@ class VoiceOutput:
                 logger.info("Downloaded %s (%.1f MB)", path.name, path.stat().st_size / 1e6)
 
     # ══════════════════════════════════════════════════════════════════
-    #  LANGUAGE DETECTION + EDGE-TTS
+    #  AUDIO PLAYBACK WITH AMPLITUDE CALLBACK
+    # ══════════════════════════════════════════════════════════════════
+    def _play_with_amplitude(self, audio: np.ndarray, sr: int) -> None:
+        """Play audio while firing amplitude callbacks for lip-sync."""
+        if self._on_speak_start:
+            self._on_speak_start()
+
+        # Mono conversion for amplitude calculation
+        if audio.ndim > 1:
+            mono = audio.mean(axis=1)
+        else:
+            mono = audio
+
+        chunk_size = max(1, int(sr * _AMPLITUDE_CHUNK_MS / 1000))
+
+        try:
+            with sd.OutputStream(samplerate=sr, channels=1 if audio.ndim == 1 else audio.shape[1],
+                                 dtype='float32') as stream:
+                pos = 0
+                while pos < len(audio):
+                    end = min(pos + chunk_size, len(audio))
+                    chunk = audio[pos:end]
+                    stream.write(chunk if chunk.ndim > 1 else chunk.reshape(-1, 1))
+
+                    # RMS amplitude for lip sync
+                    if self._on_amplitude:
+                        mono_chunk = mono[pos:end]
+                        rms = float(np.sqrt(np.mean(mono_chunk ** 2)))
+                        # Normalize to 0-1 range with some headroom
+                        amplitude = min(1.0, rms * 4.0)
+                        self._on_amplitude(amplitude)
+
+                    pos = end
+
+            # Signal silence after playback
+            if self._on_amplitude:
+                self._on_amplitude(0.0)
+
+        except Exception:
+            logger.exception("Audio playback error")
+
+        if self._on_speak_end:
+            self._on_speak_end()
+
+    # ══════════════════════════════════════════════════════════════════
+    #  EDGE-TTS SYNTHESIS
     # ══════════════════════════════════════════════════════════════════
     def _speak_edge(self, text: str, lang: str) -> bool:
         """Synthesize and play speech via edge-tts. Returns True on success."""
@@ -180,9 +229,8 @@ class VoiceOutput:
             voice = _EDGE_VOICES.get(lang, _EDGE_VOICES["en"])
             logger.debug("edge-tts: voice=%s lang=%s text=%s", voice, lang, text[:60])
 
-            # Run async edge-tts in a new event loop
             async def _synthesize():
-                communicate = edge_tts.Communicate(text, voice, rate=_EDGE_RATE)
+                communicate = edge_tts.Communicate(text, voice, rate=self._edge_rate)
                 audio_data = b""
                 async for chunk in communicate.stream():
                     if chunk["type"] == "audio":
@@ -206,21 +254,8 @@ class VoiceOutput:
 
             try:
                 audio, sr = sf.read(tmp_path, dtype="float32")
-                # Normalize
-                peak = np.max(np.abs(audio))
-                if peak > 0.01:
-                    audio = audio * (0.85 / peak)
-                # Fade edges (15ms)
-                fade_len = min(int(sr * 15 / 1000), len(audio) // 4)
-                if fade_len > 1:
-                    audio[:fade_len] *= np.linspace(0.0, 1.0, fade_len, dtype=np.float32)
-                    audio[-fade_len:] *= np.linspace(1.0, 0.0, fade_len, dtype=np.float32)
-                if self._on_speak_start:
-                    self._on_speak_start()
-                sd.play(audio, samplerate=sr)
-                sd.wait()
-                if self._on_speak_end:
-                    self._on_speak_end()
+                audio = self._postprocess_audio(audio, sr)
+                self._play_with_amplitude(audio, sr)
                 return True
             finally:
                 try:
@@ -279,17 +314,34 @@ class VoiceOutput:
     # ══════════════════════════════════════════════════════════════════
     @staticmethod
     def _postprocess_audio(samples: np.ndarray, sample_rate: int) -> np.ndarray:
-        """Light post-processing: normalize + anti-click fade."""
+        """Normalize + dynamic range compression + anti-click fade."""
         audio = samples.copy().astype(np.float32)
         if len(audio) == 0:
             return audio
+
+        # Dynamic range compression (soft knee)
         peak = np.max(np.abs(audio))
         if peak > 0.01:
-            audio = audio * (0.85 / peak)
-        fade_len = min(int(sample_rate * 8 / 1000), len(audio) // 4)
+            # Compress peaks above 0.7 threshold
+            threshold = 0.7
+            ratio = 3.0
+            mask = np.abs(audio) > threshold * peak
+            if np.any(mask):
+                over = np.abs(audio[mask]) - threshold * peak
+                compressed = threshold * peak + over / ratio
+                audio[mask] = np.sign(audio[mask]) * compressed
+
+            # Final normalization
+            peak_new = np.max(np.abs(audio))
+            if peak_new > 0.01:
+                audio = audio * (0.85 / peak_new)
+
+        # Anti-click fade (15ms)
+        fade_len = min(int(sample_rate * 15 / 1000), len(audio) // 4)
         if fade_len > 1:
             audio[:fade_len] *= np.linspace(0.0, 1.0, fade_len, dtype=np.float32)
             audio[-fade_len:] *= np.linspace(1.0, 0.0, fade_len, dtype=np.float32)
+
         return audio
 
     # ══════════════════════════════════════════════════════════════════
@@ -303,12 +355,10 @@ class VoiceOutput:
         if self._gui_callback:
             self._gui_callback(f"[PMC] {text}")
 
-        # Detect language and try edge-tts first
         lang = _detect_language(text)
         if self._edge_available and self._speak_edge(clean, lang):
             return
 
-        # Fallback: Kokoro (English only)
         if self._kokoro is not None:
             self._speak_kokoro(clean)
         else:
@@ -317,11 +367,10 @@ class VoiceOutput:
     def speak_streamed(self, sentences: Generator[str, None, None]) -> None:
         """Speak sentences as they stream from the LLM.
 
-        Uses edge-tts for multilingual, Kokoro fallback for English.
+        Batches all sentences into one synthesis for seamless speech.
         """
         full_response: list[str] = []
 
-        # Collect all sentences first
         for sentence in sentences:
             if sentence.strip():
                 full_response.append(sentence)
@@ -329,11 +378,9 @@ class VoiceOutput:
         if not full_response:
             return
 
-        # Log the full response
         if self._gui_callback:
             self._gui_callback(f"[PMC] {' '.join(full_response)}")
 
-        # Batch all sentences into one text for seamless synthesis
         full_text = self._preprocess_for_speech(" ".join(full_response))
         if not full_text.strip():
             return
@@ -343,69 +390,11 @@ class VoiceOutput:
         if self._edge_available and self._speak_edge(full_text, lang):
             return
 
-        # Fallback: Kokoro
+        # Fallback: Kokoro (English only)
         if self._kokoro is not None:
             self._speak_kokoro(full_text)
-        return
-
-        # No edge-tts: use Kokoro async pipeline
-        if self._kokoro is None:
-            full = []
-            for s in sentences:
-                if not s.strip():
-                    continue
-                full.append(s)
-                self._speak_say(self._preprocess_for_speech(s))
-            if self._gui_callback and full:
-                self._gui_callback(f"[PMC] {' '.join(full)}")
-            return
-
-        audio_q: queue.Queue = queue.Queue(maxsize=3)
-
-        def _producer() -> None:
-            for sentence in sentences:
-                if not sentence.strip():
-                    continue
-                full_response.append(sentence)
-                speech_text = self._preprocess_for_speech(sentence)
-                if not speech_text or not speech_text.strip():
-                    continue
-                try:
-                    with self._kokoro_lock:
-                        samples, sr = self._kokoro.create(
-                            speech_text,
-                            voice=self._voice,
-                            speed=self._speed,
-                            lang=self._lang,
-                        )
-                    processed = self._postprocess_audio(samples, sr)
-                    audio_q.put((processed, sr))
-                except Exception:
-                    logger.exception("TTS synthesis failed: %s", speech_text[:50])
-                    continue
-            audio_q.put(_SENTINEL)
-
-        producer = threading.Thread(target=_producer, name="TTSSynth", daemon=True)
-        producer.start()
-
-        while True:
-            try:
-                item = audio_q.get(timeout=30.0)
-            except queue.Empty:
-                logger.warning("TTS playback timed out")
-                break
-            if item is _SENTINEL:
-                break
-            audio_data, sr = item
-            try:
-                sd.play(audio_data, samplerate=sr)
-                sd.wait()
-            except Exception:
-                logger.exception("Playback error")
-
-        producer.join(timeout=5.0)
-        if self._gui_callback and full_response:
-            self._gui_callback(f"[PMC] {' '.join(full_response)}")
+        else:
+            self._speak_say(full_text)
 
     # ── Kokoro single sentence ────────────────────────────────────────
     def _speak_kokoro(self, text: str) -> None:
@@ -415,12 +404,7 @@ class VoiceOutput:
                     text, voice=self._voice, speed=self._speed, lang=self._lang,
                 )
             processed = self._postprocess_audio(samples, sr)
-            if self._on_speak_start:
-                self._on_speak_start()
-            sd.play(processed, samplerate=sr)
-            sd.wait()
-            if self._on_speak_end:
-                self._on_speak_end()
+            self._play_with_amplitude(processed, sr)
         except Exception:
             logger.exception("Kokoro TTS failed -- falling back to 'say'")
             self._speak_say(text)
@@ -430,7 +414,11 @@ class VoiceOutput:
         import platform
         if platform.system() == "Darwin":
             try:
+                if self._on_speak_start:
+                    self._on_speak_start()
                 subprocess.run(["say", "-v", "Daniel", text], check=True, timeout=_SAY_TIMEOUT_S)
+                if self._on_speak_end:
+                    self._on_speak_end()
             except FileNotFoundError:
                 logger.error("'say' command not found")
             except subprocess.TimeoutExpired:
@@ -444,5 +432,11 @@ class VoiceOutput:
 if __name__ == "__main__":
     from logging_config import setup_logging
     setup_logging()
-    vo = VoiceOutput()
-    vo.speak("Hello there, this is a test of the neural voice engine.")
+
+    def _print_amp(a: float) -> None:
+        bars = int(a * 30)
+        print(f"  {'█' * bars}{'░' * (30 - bars)} {a:.2f}", end="\r")
+
+    vo = VoiceOutput(on_amplitude=_print_amp)
+    vo.speak("Hello there, this is a test of the neural voice engine with lip sync.")
+    print()

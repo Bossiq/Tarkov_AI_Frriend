@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>Real-time voice AI companion for Escape from Tarkov</strong><br/>
-  3D animated avatar • Multilingual speech • Groq/Ollama LLM • Twitch integration
+  Anime avatar with lip-sync • Multilingual speech • Groq/Ollama LLM • Push-to-Talk • Twitch
 </p>
 
 <p align="center">
@@ -27,7 +27,10 @@
 | 🎤 **Voice Input** | Real-time speech recognition via faster-whisper (GPU accelerated) |
 | 🧠 **Dual LLM** | Groq cloud (250+ tok/s, free) or Ollama local — auto-selects |
 | 🔊 **Neural TTS** | Microsoft edge-tts with AriaNeural (EN), DariyaNeural (RU), AlinaNeural (RO) |
-| 🎭 **3D Avatar** | Region-composited animation: independent mouth, eye, and expression blending |
+| 🎭 **Anime Avatar** | Region-composited animation with audio-driven lip sync |
+| 🎵 **Lip Sync** | Real-time RMS amplitude → mouth pose mapping (20ms resolution) |
+| 😊 **Emotion Detection** | Keyword-based sentiment analysis drives avatar expressions |
+| 🎮 **Push-to-Talk** | Three input modes: Auto VAD, Toggle (F4), Hold (F4) |
 | 🌐 **Multilingual** | English, Russian, Romanian — auto-detection or manual override |
 | 📺 **Twitch Bot** | Optional chat integration for stream interactions |
 | 🎮 **Tarkov Knowledge** | Built-in quest reference database for accurate game info |
@@ -46,7 +49,7 @@
          │            │                │
     ┌────▼────────────▼────────────────▼───┐
     │              Main Controller          │
-    │          (SCAVESystem)                │
+    │          (PMCOverwatch)               │
     └──┬──────────┬───────────┬────────────┘
        │          │           │
   ┌────▼──┐  ┌───▼────┐  ┌──▼───────┐

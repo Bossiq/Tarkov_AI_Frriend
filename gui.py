@@ -343,10 +343,17 @@ class OverwatchGUI(ctk.CTk):
         self._double_blink = False
         self._double_blink_count = 0
 
-        # Speaking
-        self._talk_timer = 0.0
+        # Speaking — amplitude driven
+        self._amplitude = 0.0
+        self._amplitude_target = 0.0
         self._talk_pose = "talk_a"
-        self._talk_cd = random.uniform(0.08, 0.18)
+
+        # Emotion overlay
+        self._emotion = "neutral"  # neutral, happy, curious
+        self._emotion_timer = 0.0
+
+        # Input mode display
+        self._input_mode = os.getenv("INPUT_MODE", "auto").lower()
 
         # Voice bars
         self._bar_target = [0.0] * _N_BARS
@@ -489,17 +496,14 @@ class OverwatchGUI(ctk.CTk):
 
         # ── Mode → compositing ────────────────────────────────────────
         if mode == "speaking":
-            self._talk_timer += dt
-            if self._talk_timer >= self._talk_cd:
-                self._talk_timer = 0.0
-                self._talk_cd = random.uniform(0.07, 0.16)
-                r = random.random()
-                if r < 0.35:
-                    self._talk_pose = "talk_a"
-                elif r < 0.7:
-                    self._talk_pose = "talk_b"
-                else:
-                    self._talk_pose = "neutral"  # Brief lip closure
+            # Amplitude-driven mouth pose selection
+            self._amplitude += (self._amplitude_target - self._amplitude) * 0.4
+            if self._amplitude < 0.12:
+                self._talk_pose = "neutral"
+            elif self._amplitude < 0.4:
+                self._talk_pose = "talk_a"
+            else:
+                self._talk_pose = "talk_b"
             self._engine.set_mode("speaking", self._talk_pose)
 
         elif mode == "thinking":
@@ -510,6 +514,13 @@ class OverwatchGUI(ctk.CTk):
 
         else:
             self._engine.set_mode("idle")
+
+        # ── Emotion overlay ───────────────────────────────────────────
+        if self._emotion == "happy" and mode == "speaking":
+            self._emotion_timer += dt
+            if self._emotion_timer > 3.0:
+                self._emotion = "neutral"
+                self._emotion_timer = 0.0
 
     def _start_anim(self) -> None:
         self._tick()
@@ -576,7 +587,11 @@ class OverwatchGUI(ctk.CTk):
         self._status_lbl = ctk.CTkLabel(inner, text="Offline",
                                         font=ctk.CTkFont(size=12), text_color=_TEXT2)
         self._status_lbl.pack(side="left")
-        ctk.CTkLabel(inner, text="v15.0", font=ctk.CTkFont(size=11),
+        mode_labels = {"auto": "Auto", "toggle": "Toggle (F4)", "push": "PTT (F4)"}
+        mode_text = mode_labels.get(self._input_mode, "Auto")
+        ctk.CTkLabel(inner, text=f"🎤 {mode_text}", font=ctk.CTkFont(size=11),
+                     text_color=_TEXT2).pack(side="right", padx=(0, 12))
+        ctk.CTkLabel(inner, text="v16.0", font=ctk.CTkFont(size=11),
                      text_color=_MUTED).pack(side="right")
 
     # ══ PUBLIC API ════════════════════════════════════════════════════
@@ -593,6 +608,12 @@ class OverwatchGUI(ctk.CTk):
         self.after(0, self._force_off)
     def set_vis_mode(self, mode: str) -> None:
         self.after(0, self._set_mode, mode)
+    def set_amplitude(self, amp: float) -> None:
+        """Set current audio amplitude for lip sync (0.0-1.0)."""
+        self._amplitude_target = amp
+    def set_emotion(self, emotion: str) -> None:
+        """Set avatar emotion: 'neutral', 'happy', 'curious'."""
+        self.after(0, self._do_emotion, emotion)
 
     # ══ INTERNAL ═════════════════════════════════════════════════════
     def _do_log(self, line: str) -> None:
@@ -609,6 +630,10 @@ class OverwatchGUI(ctk.CTk):
         }
         t, c = labels.get(mode, ("OFFLINE", _MUTED))
         self._av_status.configure(text=t, text_color=c)
+
+    def _do_emotion(self, emotion: str) -> None:
+        self._emotion = emotion
+        self._emotion_timer = 0.0
 
     def _do_status(self, text: str) -> None:
         self._status_lbl.configure(text=text)

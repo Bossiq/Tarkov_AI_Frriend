@@ -73,13 +73,13 @@ class SCAVESystem:
         """Load the AI brain on a background thread (avoids GUI freeze)."""
         try:
             self._brain = Brain()
-            self._gui.log(f"🧠 Brain online (Ollama: {self._brain._model})")
+            self._gui.log(f"[Brain] Online (Ollama: {self._brain._model})")
         except ConnectionError as exc:
-            self._gui.log(f"⚠ {exc}")
+            self._gui.log(f"[!] {exc}")
             logger.error("Brain init failed: %s", exc)
             self._brain = None
 
-        self._gui.log("System ready. Click ▶ Start Overwatch to begin.")
+        self._gui.log("System ready. Click Start to begin.")
 
     # ── Twitch ────────────────────────────────────────────────────────
     def setup_twitch(self) -> bool:
@@ -90,7 +90,7 @@ class SCAVESystem:
             self._twitch_bot.set_system_reference(self)
             return True
         except ValueError as exc:
-            self._gui.log(f"⚠ Twitch disabled — {exc}")
+            self._gui.log(f"[!] Twitch disabled: {exc}")
             logger.warning("Twitch bot not started: %s", exc)
             return False
 
@@ -101,11 +101,11 @@ class SCAVESystem:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            self._gui.log("📺 Twitch bot connecting …")
+            self._gui.log("[Twitch] Connecting...")
             self._twitch_bot.run()
         except Exception:
             logger.exception("Twitch bot error")
-            self._gui.log("⚠ Twitch bot disconnected")
+            self._gui.log("[!] Twitch bot disconnected")
 
     # ── Toggle ────────────────────────────────────────────────────────
     def _on_toggle(self, is_running: bool) -> None:
@@ -118,8 +118,8 @@ class SCAVESystem:
         if is_running:
             if self._brain is None:
                 self._gui.log(
-                    "⚠ Cannot start — Ollama is not running. "
-                    "Run: brew services start ollama"
+                    "[!] Cannot start: Ollama is not running. "
+                    "Launch the Ollama app or run: ollama serve"
                 )
                 # Reset toggle back to stopped state
                 self._gui.force_toggle_off()
@@ -142,28 +142,28 @@ class SCAVESystem:
         """
         # Calibrate mic on the background thread — this blocks for ~1s
         # but that's fine because we're NOT on the Tkinter main thread
-        self._gui.log("🔊 Calibrating microphone …")
-        self._gui.set_status("Calibrating…")
+        self._gui.log("[Mic] Calibrating...")
+        self._gui.set_status("Calibrating...")
         self._vi.calibrate(gui_log=self._gui.log)
 
-        self._gui.log("🎧 Listening active — speak to interact.")
-        self._gui.set_status("Listening…")
+        self._gui.log("[Mic] Listening active -- speak to interact.")
+        self._gui.set_status("Listening...")
         logger.info("Listening thread started")
 
         while self._running and not self._shutdown.is_set():
             try:
-                self._gui.set_status("🎧 Listening…")
+                self._gui.set_status("Listening...")
                 self._process_interaction(use_audio=True)
             except Exception:
                 logger.exception("Error in listening loop")
-                self._gui.log("⚠ Listening error — retrying …")
+                self._gui.log("[!] Listening error -- retrying...")
                 if self._shutdown.wait(timeout=2.0):
                     break
             # Small pause between listen cycles
             if self._shutdown.wait(timeout=0.1):
                 break
 
-        self._gui.log("🎧 Listening stopped.")
+        self._gui.log("[Mic] Listening stopped.")
         self._gui.set_status("Offline")
         logger.info("Listening thread stopped")
 
@@ -171,7 +171,7 @@ class SCAVESystem:
     async def _on_twitch_message(self, author: str, content: str) -> None:
         if "scav" in content.lower() or "blyat" in content.lower():
             prompt = f"User {author} said: '{content}'. Respond to them."
-            self._gui.log(f"💬 Twitch [{author}]: {content}")
+            self._gui.log(f"[Twitch] {author}: {content}")
             await asyncio.to_thread(
                 self._process_interaction, text_prompt=prompt
             )
@@ -189,13 +189,13 @@ class SCAVESystem:
         # ── Audio capture + transcription ─────────────────────────────
         if use_audio:
             try:
-                self._gui.set_status("🎧 Listening…")
+                self._gui.set_status("Listening...")
                 audio_path = self._vi.listen(output_filename="current_request.wav")
                 if not audio_path:
                     return
 
-                self._gui.log("📡 Speech captured, transcribing …")
-                self._gui.set_status("Transcribing…")
+                self._gui.log("[STT] Speech captured, transcribing...")
+                self._gui.set_status("Transcribing...")
                 transcription = self._vi.transcribe(audio_path)
 
                 # Clean up recorded audio
@@ -206,30 +206,30 @@ class SCAVESystem:
                         logger.warning("Could not remove temp audio: %s", audio_path)
 
                 if not transcription:
-                    self._gui.log("⚠ Could not understand audio, try again.")
+                    self._gui.log("[!] Could not understand audio, try again.")
                     return
 
-                self._gui.log(f"🗣 You: {transcription}")
+                self._gui.log(f"[You] {transcription}")
                 text_prompt = transcription
 
             except Exception:
                 logger.exception("Audio capture/transcription error")
-                self._gui.log("⚠ Audio capture failed")
+                self._gui.log("[!] Audio capture failed")
                 return
 
         if not text_prompt:
             return
 
         # ── Stream response sentence-by-sentence ──────────────────────
-        self._gui.set_status("🧠 Thinking…")
-        self._gui.log("🧠 Generating response …")
+        self._gui.set_status("Thinking...")
+        self._gui.log("[Brain] Generating response...")
 
         response_start = time.monotonic()
-        self._gui.set_status("🎙 Speaking…")
+        self._gui.set_status("Speaking...")
         self._vo.speak_streamed(self._brain.stream_sentences(text_prompt))
         elapsed = time.monotonic() - response_start
         logger.info("Response cycle completed in %.1fs", elapsed)
-        self._gui.set_status("🎧 Listening…" if self._running else "Offline")
+        self._gui.set_status("Listening..." if self._running else "Offline")
 
 
 # ── Entry point ──────────────────────────────────────────────────────
@@ -259,8 +259,8 @@ def main() -> None:
             t.start()
             gui.register_thread(t)
     else:
-        gui.log("ℹ Twitch disabled (TWITCH_TOKEN not set)")
-        logger.info("Twitch bot disabled — no TWITCH_TOKEN in environment")
+        gui.log("[Info] Twitch disabled (TWITCH_TOKEN not set)")
+        logger.info("Twitch bot disabled -- no TWITCH_TOKEN in environment")
 
     # ── Run ───────────────────────────────────────────────────────────
     logger.info("Starting PMC Overwatch GUI")

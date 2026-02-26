@@ -69,16 +69,23 @@ class VoiceInput:
                 if self._whisper_model is None:
                     model = os.getenv("WHISPER_MODEL", _DEFAULT_WHISPER_MODEL)
                     compute = os.getenv("WHISPER_COMPUTE_TYPE", _DEFAULT_COMPUTE_TYPE)
-                    logger.info("Loading faster-whisper '%s' (compute=%s) …", model, compute)
-                    from faster_whisper import WhisperModel
-                    # Use CUDA on Windows/Linux if available, else CPU
                     device = os.getenv("WHISPER_DEVICE", "auto")
+
+                    # Auto-detect: use CUDA if available, else CPU
                     if device == "auto":
                         try:
-                            import torch
-                            device = "cuda" if torch.cuda.is_available() else "cpu"
-                        except ImportError:
+                            import ctranslate2
+                            device = "cuda" if "cuda" in ctranslate2.get_supported_compute_types("cuda") else "cpu"
+                        except Exception:
                             device = "cpu"
+
+                    # Force safe compute type on CPU
+                    if device == "cpu" and compute == "float16":
+                        logger.warning("float16 not supported on CPU — falling back to int8")
+                        compute = "int8"
+
+                    logger.info("Loading faster-whisper '%s' (device=%s, compute=%s) …", model, device, compute)
+                    from faster_whisper import WhisperModel
                     self._whisper_model = WhisperModel(
                         model, device=device, compute_type=compute)
                     logger.info("Whisper model loaded")

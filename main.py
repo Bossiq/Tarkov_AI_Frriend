@@ -234,6 +234,10 @@ class SCAVESystem:
 
 # ── Entry point ──────────────────────────────────────────────────────
 def main() -> None:
+    # Set an event loop for the main thread so TwitchIO can attach to it during init
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
     gui = OverwatchGUI()
     system = SCAVESystem(gui)
 

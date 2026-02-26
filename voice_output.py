@@ -102,7 +102,8 @@ class VoiceOutput:
         self._kokoro = None
         self._kokoro_lock = threading.Lock()
 
-        self._init_kokoro()
+        # Initialize in background so GUI doesn't freeze on load
+        threading.Thread(target=self._init_kokoro, name="KokoroInit", daemon=True).start()
 
     # ── Kokoro initialisation ─────────────────────────────────────────
     def _init_kokoro(self) -> None:
@@ -294,16 +295,20 @@ class VoiceOutput:
             logger.exception("Kokoro TTS failed — falling back to 'say'")
             self._speak_say(text)
 
-    # ── macOS fallback ────────────────────────────────────────────────
+    # ── Platform fallback ─────────────────────────────────────────────
     def _speak_say(self, text: str) -> None:
-        try:
-            subprocess.run(["say", "-v", "Daniel", text], check=True, timeout=_SAY_TIMEOUT_S)
-        except FileNotFoundError:
-            logger.error("'say' command not found — are you on macOS?")
-        except subprocess.TimeoutExpired:
-            logger.warning("TTS timed out after %ds", _SAY_TIMEOUT_S)
-        except Exception:
-            logger.exception("Fallback TTS error")
+        import platform
+        if platform.system() == "Darwin":
+            try:
+                subprocess.run(["say", "-v", "Daniel", text], check=True, timeout=_SAY_TIMEOUT_S)
+            except FileNotFoundError:
+                logger.error("'say' command not found")
+            except subprocess.TimeoutExpired:
+                logger.warning("TTS timed out after %ds", _SAY_TIMEOUT_S)
+            except Exception:
+                logger.exception("Fallback TTS error")
+        else:
+            logger.warning("No fallback TTS on this platform — Kokoro is required")
 
 
 if __name__ == "__main__":

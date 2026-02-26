@@ -238,12 +238,14 @@ class Brain:
 
 if __name__ == "__main__":
     from logging_config import setup_logging
+    from dotenv import load_dotenv
 
     setup_logging()
+    load_dotenv()
     brain = Brain()
     print("=== Streaming test ===")
     for sentence in brain.stream_sentences("Give a brief tactical report. Three sentences."):
-        print(f"  → {sentence}")
+        print(f"  > {sentence}")
     print("\n=== Memory test ===")
     for sentence in brain.stream_sentences("What did I just ask you?"):
-        print(f"  → {sentence}")
+        print(f"  > {sentence}")

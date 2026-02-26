@@ -71,8 +71,16 @@ class VoiceInput:
                     compute = os.getenv("WHISPER_COMPUTE_TYPE", _DEFAULT_COMPUTE_TYPE)
                     logger.info("Loading faster-whisper '%s' (compute=%s) …", model, compute)
                     from faster_whisper import WhisperModel
+                    # Use CUDA on Windows/Linux if available, else CPU
+                    device = os.getenv("WHISPER_DEVICE", "auto")
+                    if device == "auto":
+                        try:
+                            import torch
+                            device = "cuda" if torch.cuda.is_available() else "cpu"
+                        except ImportError:
+                            device = "cpu"
                     self._whisper_model = WhisperModel(
-                        model, device="cpu", compute_type=compute)
+                        model, device=device, compute_type=compute)
                     logger.info("Whisper model loaded")
         return self._whisper_model
 

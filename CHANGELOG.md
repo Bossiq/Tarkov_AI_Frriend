@@ -2,6 +2,21 @@
 
 All notable changes to PMC Overwatch are documented here.
 
+## [0.22.0] — 2026-02-26
+
+### Added
+- **3D holographic avatar**: upper-body sprites with holographic projection look
+- **HoloFX pipeline**: scanlines, chromatic aberration, edge glow, flicker, cyan tint
+- **Glass-morphism UI**: darker palette, wider radius corners, accent colors, modern fonts
+- Precomputed scanline overlay for zero per-frame cost
+
+### Changed
+- All 6 sprites regenerated as holographic upper-body style
+- GUI background → `#050810` (deeper), cards → `#0d1117`
+- Canvas expanded to 420×440, waveform bars → 35
+- Status labels use diamond ◆ prefix
+- Send button uses accent blue
+
 ## [0.21.0] — 2026-02-26
 
 ### Added

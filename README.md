@@ -6,13 +6,13 @@
 
 <p align="center">
   <strong>Real-time voice AI companion for Escape from Tarkov</strong><br/>
-  Animated avatar • Multilingual speech • Local LLM • Twitch integration
+  3D animated avatar • Multilingual speech • Groq/Ollama LLM • Twitch integration
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.10%2B-blue?logo=python" alt="Python 3.10+" />
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS-lightgrey?logo=windows" alt="Platform" />
-  <img src="https://img.shields.io/badge/LLM-Ollama%20%28qwen2.5%29-orange?logo=ollama" alt="LLM" />
+  <img src="https://img.shields.io/badge/LLM-Groq%20%2B%20Ollama-orange" alt="LLM" />
   <img src="https://img.shields.io/badge/TTS-edge--tts%20Neural-green" alt="TTS" />
   <img src="https://img.shields.io/badge/STT-faster--whisper-red" alt="STT" />
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="License" />
@@ -25,9 +25,9 @@
 | Feature | Description |
 |---------|-------------|
 | 🎤 **Voice Input** | Real-time speech recognition via faster-whisper (GPU accelerated) |
-| 🧠 **Local LLM** | Ollama-powered responses with Tarkov quest knowledge base |
+| 🧠 **Dual LLM** | Groq cloud (250+ tok/s, free) or Ollama local — auto-selects |
 | 🔊 **Neural TTS** | Microsoft edge-tts with AriaNeural (EN), DariyaNeural (RU), AlinaNeural (RO) |
-| 🎭 **Animated Avatar** | Sprite-based animation with facial expressions (talk, blink, think) |
+| 🎭 **3D Avatar** | Region-composited animation: independent mouth, eye, and expression blending |
 | 🌐 **Multilingual** | English, Russian, Romanian — auto-detection or manual override |
 | 📺 **Twitch Bot** | Optional chat integration for stream interactions |
 | 🎮 **Tarkov Knowledge** | Built-in quest reference database for accurate game info |
@@ -38,8 +38,9 @@
 ┌──────────────────────────────────────────────┐
 │                PMC Overwatch GUI              │
 │  ┌──────────┐  ┌──────────┐  ┌────────────┐ │
-│  │ Animated  │  │ Activity │  │  Controls   │ │
-│  │  Avatar   │  │   Log    │  │ Start/Stop  │ │
+│  │ 3D Avatar│  │ Activity │  │  Controls   │ │
+│  │ Region   │  │   Log    │  │ Start/Stop  │ │
+│  │Composited│  │          │  │             │ │
 │  └─────┬────┘  └────┬─────┘  └──────┬─────┘ │
 └────────┼────────────┼────────────────┼───────┘
          │            │                │
@@ -50,8 +51,8 @@
        │          │           │
   ┌────▼──┐  ┌───▼────┐  ┌──▼───────┐
   │Voice  │  │ Brain  │  │  Voice   │
-  │Input  │  │(Ollama)│  │  Output  │
-  │Whisper│  │qwen2.5 │  │ edge-tts │
+  │Input  │  │Groq/   │  │  Output  │
+  │Whisper│  │Ollama  │  │ edge-tts │
   └───────┘  └────────┘  └──────────┘
 ```
 
@@ -60,7 +61,8 @@
 ### Prerequisites
 
 - **Python 3.10+**
-- **Ollama** — [ollama.com](https://ollama.com) (download and install)
+- **Groq API key** (recommended) — [console.groq.com/keys](https://console.groq.com/keys)
+- **Ollama** (optional fallback) — [ollama.com](https://ollama.com)
 - **CUDA** (optional) — For GPU-accelerated Whisper
 
 ### Installation
@@ -78,12 +80,9 @@ source venv/bin/activate    # macOS/Linux
 # Install dependencies
 pip install -r requirements.txt
 
-# Pull the LLM model
-ollama pull qwen2.5:7b
-
 # Configure environment
 cp .env.example .env
-# Edit .env with your settings
+# Edit .env — add your GROQ_API_KEY for fastest responses
 ```
 
 ### Run
@@ -98,32 +97,31 @@ All settings are in `.env`:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `OLLAMA_MODEL` | `qwen2.5:7b` | Ollama model for responses |
-| `OLLAMA_NUM_CTX` | `4096` | Context window size |
-| `WHISPER_MODEL` | `base` | Whisper model size (`tiny`, `base`, `small`, `medium`) |
-| `WHISPER_DEVICE` | `auto` | `cuda` or `cpu` |
-| `WHISPER_LANGUAGE` | `en` | Speech language (`en`, `ru`, `ro`, `auto`) |
+| `GROQ_API_KEY` | — | Groq cloud API key (primary, fastest) |
+| `GROQ_MODEL` | `llama-3.3-70b-versatile` | Groq model |
+| `OLLAMA_MODEL` | `qwen2.5:3b` | Ollama fallback model |
+| `OLLAMA_NUM_CTX` | `2048` | Context window size |
+| `WHISPER_MODEL` | `small` | Whisper model size (`tiny`, `base`, `small`, `medium`) |
 | `TTS_VOICE` | `af_heart` | Kokoro fallback voice |
 | `TTS_SPEED` | `1.1` | Kokoro speech speed |
 | `TWITCH_TOKEN` | — | Twitch OAuth token (optional) |
-| `TWITCH_CHANNEL` | — | Twitch channel name (optional) |
+| `TWITCH_INITIAL_CHANNELS` | — | Twitch channel name (optional) |
 
-### Language Configuration
+### LLM Engine Selection
 
-| Use Case | `WHISPER_LANGUAGE` | Description |
-|----------|-------------------|-------------|
-| English only | `en` (default) | Best accuracy for English speech |
-| Russian only | `ru` | For Russian-speaking users |
-| Romanian only | `ro` | For Romanian-speaking users |
-| Auto-detect | `auto` | Detects language automatically (may misidentify) |
+| Config | Speed | Quality | Requirement |
+|--------|-------|---------|-------------|
+| Groq (recommended) | 250+ tok/s | Excellent (70B model) | Free API key |
+| Ollama qwen2.5:3b | 20-60 tok/s | Good | Local GPU |
+| Ollama qwen2.5:7b | 10-30 tok/s | Better | Good GPU |
 
 ## 📁 Project Structure
 
 ```
 Tarkov_AI_Frriend/
 ├── main.py              # Application entry point & controller
-├── brain.py             # LLM integration (Ollama)
-├── gui.py               # Animated avatar GUI (CustomTkinter)
+├── brain.py             # Dual LLM brain (Groq + Ollama)
+├── gui.py               # Region-composited avatar GUI
 ├── voice_input.py       # Speech recognition (faster-whisper)
 ├── voice_output.py      # Text-to-speech (edge-tts + Kokoro)
 ├── tarkov_data.py       # Tarkov quest knowledge base
@@ -138,18 +136,21 @@ Tarkov_AI_Frriend/
 │   ├── talk_a.png       # Mouth slightly open
 │   ├── talk_b.png       # Mouth wide open
 │   ├── blink.png        # Eyes closed
-│   └── think.png        # Thinking expression
+│   ├── think.png        # Thinking expression
+│   └── listen.png       # Listening expression
 └── models/              # Downloaded model files (auto)
 ```
 
 ## 🎭 Avatar Animation
 
-The avatar uses a **sprite-based animation system** inspired by VTuber and visual novel engines:
+The avatar uses a **region-based compositing system** for smooth, natural animation:
 
-- **Speaking**: Cycles through mouth sprites at 8fps for lip-sync
-- **Blinking**: Eyes-closed sprite every 3-6 seconds
-- **Thinking**: Thoughtful expression with eyes looking up
-- **Idle**: Subtle head micro-movement (32 motion-shifted frames)
+- **Mouth region**: Only the lower 35% of the face changes during speech — the rest stays rock-stable
+- **Eye region**: Blinks composite only the eye area (22-48% of face height)
+- **Gradient masks**: Alpha gradients at region borders prevent visible seams
+- **Speaking**: Cycles mouth poses at 5-12 fps with natural timing variation
+- **Blinking**: Natural intervals (2.5-5.5 seconds)
+- **Breathing**: Subtle full-image micro-motion (±1.2px shift, ±0.2% scale)
 
 ## 🛠 Development
 
@@ -160,12 +161,13 @@ pip install -r requirements.txt
 ```
 
 Key dependencies:
+- `groq` — Groq cloud LLM API client
+- `ollama` — Local LLM client (fallback)
 - `customtkinter` — Modern GUI framework
 - `faster-whisper` — GPU-accelerated speech recognition
 - `edge-tts` — Microsoft neural TTS voices
-- `ollama` — Local LLM client
 - `sounddevice` / `soundfile` — Audio I/O
-- `Pillow` — Image processing for avatar
+- `Pillow` — Image processing for avatar compositing
 - `twitchio` — Twitch bot framework
 
 ### Testing
@@ -192,6 +194,7 @@ This project is licensed under the MIT License — see the [LICENSE](LICENSE) fi
 
 ## 🙏 Acknowledgments
 
+- [Groq](https://groq.com) — Ultra-fast cloud LLM inference
 - [Ollama](https://ollama.com) — Local LLM inference
 - [faster-whisper](https://github.com/SYSTRAN/faster-whisper) — CTranslate2 Whisper
 - [edge-tts](https://github.com/rany2/edge-tts) — Microsoft neural voices

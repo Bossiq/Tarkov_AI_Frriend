@@ -256,7 +256,7 @@ def main() -> None:
     def _signal_handler(signum, frame):
         logger.info("Received signal %s — shutting down", signum)
         gui.shutdown_event.set()
-        gui.after(0, gui._on_closing)
+        gui.after(0, gui._on_close)
 
     signal.signal(signal.SIGTERM, _signal_handler)
     signal.signal(signal.SIGINT, _signal_handler)

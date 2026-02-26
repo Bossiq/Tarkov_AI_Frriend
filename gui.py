@@ -41,7 +41,7 @@ _BORDER = "#252b35"
 
 # Agent sizing
 _CANVAS_W = 340
-_CANVAS_H = 340
+_CANVAS_H = 420
 _FPS = 24
 
 # Voice bars
@@ -216,40 +216,87 @@ class OverwatchGUI(ctk.CTk):
                 y2 = cy_f + math.sin(a2) * r
                 cv.create_line(x1, y1, x2, y2, fill=glow_c, width=w)
 
-        # ── Agent head (stylized silhouette) ──────────────────────────
-        head_r = 55
-        # Head gradient effect - concentric circles
-        for ring in range(head_r, 0, -3):
-            frac = ring / head_r
-            # Interpolate between dark surface and slightly lighter
-            r_val = int(26 + (1 - frac) * 12)
-            g_val = int(31 + (1 - frac) * 12)
-            b_val = int(40 + (1 - frac) * 15)
-            fill = f"#{r_val:02x}{g_val:02x}{b_val:02x}"
-            cv.create_oval(cx + sway - ring, cy_f - ring,
-                           cx + sway + ring, cy_f + ring,
+        # ── Shoulders + Neck (drawn first, behind head) ─────────────────
+        neck_w = 18
+        neck_h = 25
+        shoulder_w = 85
+        shoulder_h = 30
+        neck_top = cy_f + 38
+        # Shoulders (rounded trapezoid)
+        cv.create_polygon(
+            cx + sway - neck_w, neck_top,
+            cx + sway - shoulder_w, neck_top + neck_h + shoulder_h,
+            cx + sway - shoulder_w + 15, neck_top + neck_h + shoulder_h + 10,
+            cx + sway + shoulder_w - 15, neck_top + neck_h + shoulder_h + 10,
+            cx + sway + shoulder_w, neck_top + neck_h + shoulder_h,
+            cx + sway + neck_w, neck_top,
+            fill="#1a2030", outline=glow_c, width=1, smooth=True
+        )
+        # Neck
+        cv.create_rectangle(
+            cx + sway - neck_w, neck_top,
+            cx + sway + neck_w, neck_top + neck_h,
+            fill="#1e2535", outline=""
+        )
+
+        # ── Head (oval, not circle — more realistic) ──────────────────
+        head_w = 48
+        head_h = 58
+        head_cy = cy_f - 5
+        # Face fill
+        for ring in range(0, head_h, 2):
+            frac = ring / head_h
+            rr = int(28 + frac * 10)
+            gg = int(32 + frac * 10)
+            bb = int(42 + frac * 12)
+            fill = f"#{rr:02x}{gg:02x}{bb:02x}"
+            rx = head_w * (1 - (frac - 0.5)**2 * 0.3)
+            ry = head_h - ring
+            cv.create_oval(cx + sway - rx, head_cy - ry,
+                           cx + sway + rx, head_cy + ry,
                            fill=fill, outline="")
 
-        # Head outline glow
-        cv.create_oval(cx + sway - head_r, cy_f - head_r,
-                       cx + sway + head_r, cy_f + head_r,
+        # Head outline
+        cv.create_oval(cx + sway - head_w, head_cy - head_h,
+                       cx + sway + head_w, head_cy + head_h,
                        outline=glow_c, width=2)
 
-        # ── Eyes (glowing, reactive) ──────────────────────────────────
-        eye_y = cy_f - 8
-        eye_sep = 18
-        eye_w = 12
-        eye_h = 5
+        # ── Hair (styled, swept to the side) ──────────────────────────
+        hair_pts = [
+            (-head_w - 5, -15), (-head_w + 2, -head_h + 5),
+            (-head_w + 15, -head_h - 8), (-5, -head_h - 12),
+            (10, -head_h - 10), (head_w - 5, -head_h - 5),
+            (head_w + 3, -head_h + 10), (head_w + 5, -20),
+            (head_w + 2, -5), (head_w - 3, 5),
+            (head_w - 15, -head_h + 15), (0, -head_h + 5),
+            (-head_w + 10, -head_h + 12), (-head_w - 3, -5),
+        ]
+        hair_coords = []
+        for px, py in hair_pts:
+            hair_coords.extend([cx + sway + px, head_cy + py])
+        cv.create_polygon(*hair_coords, fill="#14191f", outline=glow_c,
+                          width=1, smooth=True)
 
-        # Eye glow intensity based on state
-        if self._mode == "speaking":
-            eye_intensity = 0.7 + (math.sin(self._phase * 3) + 1) * 0.15
-        elif self._mode == "thinking":
-            eye_intensity = 0.5 + (math.sin(self._phase * 5) + 1) * 0.25
-        elif self._mode == "listening":
-            eye_intensity = 0.6 + (math.sin(self._phase * 1.5) + 1) * 0.1
-        else:
-            eye_intensity = 0.3 + (math.sin(self._phase * 0.5) + 1) * 0.1
+        # ── Ears (small hints on sides) ───────────────────────────────
+        for side in [-1, 1]:
+            ear_x = cx + sway + side * (head_w - 2)
+            ear_y = head_cy - 5
+            cv.create_oval(ear_x - 5, ear_y - 8, ear_x + 5, ear_y + 8,
+                           fill="#1e2535", outline=glow_c, width=1)
+
+        # ── Eyebrows ─────────────────────────────────────────────────
+        brow_y = head_cy - 22
+        for side in [-1, 1]:
+            bx = cx + sway + side * 18
+            cv.create_line(bx - 10, brow_y + side * 1,
+                           bx + 10, brow_y - side * 1,
+                           fill=glow_c, width=2)
+
+        # ── Eyes (expressive, reactive) ───────────────────────────────
+        eye_y = head_cy - 12
+        eye_sep = 18
+        eye_w = 11
+        eye_h = 5
 
         # Blink effect (every ~5 seconds)
         blink = (math.sin(self._phase * 0.4) > 0.95)
@@ -257,22 +304,51 @@ class OverwatchGUI(ctk.CTk):
 
         for side in [-1, 1]:
             ex = cx + sway + side * eye_sep
-            # Eye glow halo
-            glow_r = eye_w + 4
-            cv.create_oval(ex - glow_r, eye_y - glow_r,
-                           ex + glow_r, eye_y + glow_r,
-                           fill="", outline=glow_c, width=1)
-            # Eye shape
+            # Eye white
+            cv.create_oval(ex - eye_w - 1, eye_y - actual_eye_h - 1,
+                           ex + eye_w + 1, eye_y + actual_eye_h + 1,
+                           fill="#1a2030", outline="")
+            # Iris
             cv.create_oval(ex - eye_w, eye_y - actual_eye_h,
                            ex + eye_w, eye_y + actual_eye_h,
                            fill=glow_c, outline="")
-            # Inner bright pupil
+            # Pupil
             pupil_r = 3 if not blink else 1
             cv.create_oval(ex - pupil_r, eye_y - pupil_r,
                            ex + pupil_r, eye_y + pupil_r,
                            fill="white", outline="")
+            # Eye glow halo
+            if self._mode != "idle":
+                glow_r = eye_w + 6
+                cv.create_oval(ex - glow_r, eye_y - glow_r,
+                               ex + glow_r, eye_y + glow_r,
+                               fill="", outline=glow_c, width=1)
 
-        # ── Circuit lines (tech details on face) ──────────────────────
+        # ── Nose (subtle line) ────────────────────────────────────────
+        nose_top = head_cy - 2
+        nose_bot = head_cy + 10
+        cv.create_line(cx + sway, nose_top, cx + sway - 3, nose_bot,
+                       fill=glow_c, width=1)
+        cv.create_line(cx + sway - 3, nose_bot, cx + sway + 3, nose_bot,
+                       fill=glow_c, width=1)
+
+        # ── Mouth (animated when speaking) ────────────────────────────
+        mouth_y = head_cy + 20
+        mouth_w = 14
+        if self._mode == "speaking":
+            # Animate mouth open/close
+            mouth_open = abs(math.sin(self._phase * 4)) * 6
+            cv.create_oval(cx + sway - mouth_w, mouth_y - mouth_open / 2,
+                           cx + sway + mouth_w, mouth_y + mouth_open / 2 + 2,
+                           fill="#0d1117", outline=glow_c, width=1)
+        else:
+            # Closed mouth (slight smile)
+            cv.create_arc(cx + sway - mouth_w, mouth_y - 4,
+                          cx + sway + mouth_w, mouth_y + 8,
+                          start=200, extent=140,
+                          style="arc", outline=glow_c, width=1)
+
+        # ── Circuit lines (tech overlay on one cheek) ─────────────────
         circuit_alpha = 0.3 + pulse * 0.3
         for line_pts in self._circuit_lines:
             for k in range(len(line_pts) - 1):
@@ -291,7 +367,7 @@ class OverwatchGUI(ctk.CTk):
         # ── Voice waveform bars (below agent) ─────────────────────────
         total_w = _N_BARS * _BAR_W + (_N_BARS - 1) * _BAR_GAP
         bx_start = cx - total_w // 2
-        by_base = cy_f + head_r + 40
+        by_base = neck_top + neck_h + shoulder_h + 18
 
         for i in range(_N_BARS):
             h = max(2, int(self._bar_current[i] * _BAR_MAX_H))

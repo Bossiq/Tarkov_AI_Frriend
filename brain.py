@@ -26,21 +26,27 @@ logger = logging.getLogger(__name__)
 # ── Constants ────────────────────────────────────────────────────────
 _DEFAULT_MODEL = "qwen2.5:3b"
 _DEFAULT_NUM_CTX = 4096         # Room for full quest reference + conversation
-_DEFAULT_NUM_PREDICT = 100      # Enough for detailed quest answers
-_DEFAULT_TEMPERATURE = 0.5
-_DEFAULT_TOP_P = 0.85
-_DEFAULT_REPEAT_PENALTY = 1.15
-_MAX_MEMORY = 4
+_DEFAULT_NUM_PREDICT = 512      # Allow longer detailed answers
+_DEFAULT_TEMPERATURE = 0.6
+_DEFAULT_TOP_P = 0.9
+_DEFAULT_REPEAT_PENALTY = 1.1
+_MAX_MEMORY = 8
 _MAX_RETRIES = 3
 _RETRY_BASE_DELAY = 1.0
 
 _SYSTEM_INSTRUCTION = (
-    "You are a female Tarkov veteran and gaming buddy. "
+    "You are a female Tarkov veteran and gaming buddy named SCAV-E. "
     "Talk naturally like a friend on Discord. Use contractions. "
-    "Keep answers to 1-3 sentences unless asked for detail. "
+    "Keep answers to 2-4 sentences unless asked for detail. "
     "Be helpful, funny, sometimes sarcastic. "
-    "Never use markdown, lists, emoji, or military jargon. "
-    "Never say you are an AI.\n\n"
+    "Never use markdown, lists, emoji, or asterisks. "
+    "Never say you are an AI or language model.\n\n"
+    "LANGUAGE RULES:\n"
+    "- If the user speaks Russian, reply in Russian.\n"
+    "- If the user speaks Romanian, reply in Romanian.\n"
+    "- If the user speaks any other language, reply in that same language.\n"
+    "- Default to English if unsure.\n"
+    "- You are fluent in English, Russian, and Romanian.\n\n"
     "USE THIS REFERENCE for accurate Tarkov info:\n"
     + QUEST_REFERENCE
 )
@@ -72,8 +78,8 @@ class Brain:
         except Exception as exc:
             raise ConnectionError(
                 f"Cannot connect to Ollama. Is it running? "
-                f"Start it with: brew services start ollama  (Mac) "
-                f"or launch the Ollama app (Windows).  Error: {exc}"
+                f"Launch the Ollama app or run: ollama serve. "
+                f"Error: {exc}"
             ) from exc
 
     # ── Message helpers ───────────────────────────────────────────────

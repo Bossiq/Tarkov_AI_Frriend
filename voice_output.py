@@ -187,16 +187,20 @@ class VoiceOutput:
         if len(audio) == 0:
             return audio
 
-        # Volume normalization — prevent clipping, ensure audibility
+        # Volume normalization -- prevent clipping, ensure audibility
         peak = np.max(np.abs(audio))
         if peak > 0.01:
-            audio = audio * (0.9 / peak)
+            audio = audio * (0.85 / peak)
 
-        # Very gentle fade-in/out (anti-click only, 3ms)
-        fade_len = min(int(sample_rate * _FADE_MS / 1000), len(audio) // 4)
+        # Smooth fade-in/out (15ms) to eliminate clicks between sentences
+        fade_len = min(int(sample_rate * 15 / 1000), len(audio) // 4)
         if fade_len > 1:
             audio[:fade_len] *= np.linspace(0.0, 1.0, fade_len, dtype=np.float32)
             audio[-fade_len:] *= np.linspace(1.0, 0.0, fade_len, dtype=np.float32)
+
+        # Add small silence padding at end (50ms) so sentences don't run together
+        padding = np.zeros(int(sample_rate * 0.05), dtype=np.float32)
+        audio = np.concatenate([audio, padding])
 
         return audio
 
@@ -209,7 +213,7 @@ class VoiceOutput:
             return
         clean = self._preprocess_for_speech(text)
         if self._gui_callback:
-            self._gui_callback(f"🎙 PMC: {text}")
+            self._gui_callback(f"[PMC] {text}")
         if self._kokoro is not None:
             self._speak_kokoro(clean)
         else:
@@ -228,7 +232,7 @@ class VoiceOutput:
                 full.append(s)
                 self._speak_say(self._preprocess_for_speech(s))
             if self._gui_callback and full:
-                self._gui_callback(f"🎙 PMC: {' '.join(full)}")
+                self._gui_callback(f"[PMC] {' '.join(full)}")
             return
 
         audio_q: queue.Queue = queue.Queue(maxsize=3)

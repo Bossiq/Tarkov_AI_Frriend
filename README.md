@@ -1,6 +1,6 @@
 # PMC Overwatch — Tarkov AI Companion
 
-> Real-time AI voice companion for Escape from Tarkov. Speak naturally, get instant voice responses with accurate quest knowledge. **Runs entirely offline on macOS.**
+> Real-time AI voice companion for Escape from Tarkov. Speak naturally, get instant voice responses with accurate quest knowledge. **Runs entirely offline on macOS and Windows.**
 
 ## ✨ Features
 
@@ -17,69 +17,67 @@
 
 | Layer | Technology |
 |-------|-----------|
-| LLM | [Ollama](https://ollama.ai) — `qwen2.5:3b` + 12K char quest knowledge base |
+| LLM | [Ollama](https://ollama.ai) — local LLM inference |
 | TTS | [Kokoro ONNX](https://github.com/thewh1teagle/kokoro-onnx) — neural voice |
-| STT | [faster-whisper](https://github.com/SYSTRAN/faster-whisper) — CTranslate2 |
+| STT | [faster-whisper](https://github.com/SYSTRAN/faster-whisper) — CTranslate2 / CUDA accelerated |
 | GUI | [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter) + Canvas animations |
 
-## 🚀 Quick Start
+## 💻 Hybrid Workflow (Mac & Windows PC)
 
-```bash
+This project supports seamless development and usage across macOS (ARM64) and Windows (x64 with NVIDIA GPUs).
+
+**Important Git Rules for Hybrid Workflow:**
+- **Virtual Environments:** Create `venv/` on Mac and `venv2/` on Windows. Both are ignored in `.gitignore`.
+- **Environment Variables:** Never commit your `.env` file. Keep a separate `.env` on your Mac and your PC.
+- **Dependencies:** Run `pip install -r requirements.txt` on both systems. Windows will automatically use CUDA for `faster-whisper` and larger local LLM models if available.
+
+### PC Quick Start (Windows)
+```powershell
+# 1. Clone & Setup Venv
 git clone https://github.com/Bossiq/Tarkov_AI_Frriend.git
 cd Tarkov_AI_Frriend
-python3 -m venv venv && source venv/bin/activate
+python -m venv venv2
+.\venv2\Scripts\activate
+
+# 2. Install Dependencies
 pip install -r requirements.txt
-cp .env.example .env
-ollama pull qwen2.5:3b
+copy .env.example .env
+
+# 3. Setup Ollama (Needs to be installed from ollama.com)
+ollama pull qwen2.5:7b
+
+# 4. Run!
 python main.py
 ```
 
-## ⚙️ Configuration
+## 🔑 Keys and Integrations (OBS & Twitch)
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `OLLAMA_MODEL` | `qwen2.5:3b` | LLM model (2GB, balanced speed + knowledge) |
-| `OLLAMA_NUM_CTX` | `4096` | Context window (fits quest reference) |
-| `TTS_VOICE` | `af_heart` | Kokoro voice ID |
-| `TTS_SPEED` | `1.2` | Speech speed |
+All keys and integrations are managed entirely through the `.env` file in the root of the project.
 
-## 📁 Project Structure
+### 🎮 How to Connect to Twitch
+To let PMC Overwatch read your Twitch chat, update your `.env` file:
+1. **TWITCH_INITIAL_CHANNELS:** Set this to your Twitch channel name (e.g., `bossiq420`).
+2. **TWITCH_TOKEN:** Generate an OAuth token from [twitchapps.com/tmi/](https://twitchapps.com/tmi/). It should look like `oauth:xxxxxxxxxx`.
 
-```
-├── main.py             # Entry point — orchestrates everything
-├── brain.py            # AI brain (Ollama + Tarkov knowledge + memory)
-├── tarkov_data.py      # 200+ quests, bosses, ammo, maps (12K chars)
-├── voice_input.py      # Callback-based mic + adaptive VAD + Whisper STT
-├── voice_output.py     # Kokoro TTS + async sentence pipeline
-├── gui.py              # Animated avatar with particles, glow, voice bars
-├── twitch_bot.py       # Optional Twitch chat integration
-├── video_capture.py    # Optional webcam capture
-├── logging_config.py   # Centralized logging
-├── assets/avatar.png   # Photorealistic AI companion portrait
-├── .env.example        # Environment template
-└── requirements.txt    # Dependencies
-```
+The app will automatically connect on startup and the AI will respond to chat messages containing "scav" or "blyat".
 
-## 🏗 Architecture
+### 🎥 How to Connect to OBS
+OBS integration for video capture relies on the **OBS Virtual Camera**:
+1. Open OBS Studio.
+2. Click **Start Virtual Camera** in the Controls panel.
+3. The python script (`video_capture.py`) grabs frames from the default virtual camera device seamlessly. 
+> Note: Video capture AI analysis is an experimental background thread in `main.py` which triggers periodically.
 
-```mermaid
-graph LR
-    A[🎤 Mic] -->|Callback Audio| B[faster-whisper]
-    B -->|Text| C[Ollama + Quest KB]
-    C -->|Streamed| D[Kokoro TTS]
-    D -->|Audio| E[🔊 Speaker]
-    C -.->|State| F[Avatar + Particles]
-```
+## ⚙️ Configuration (.env)
 
-### Design Decisions
-
-- **Callback Audio**: Uses `queue.get(timeout=0.2)` — never blocks, timeouts always fire
-- **12K Quest Knowledge**: Injected into system prompt for accurate answers from small models
-- **Adaptive Silence**: Detects silence relative to speech volume, not absolute threshold
-- **Particle Effects**: 16 orbiting particles + micro-sway make static avatar feel alive
+| Variable | PC Default | Mac Default | Description |
+|----------|------------|-------------|-------------|
+| `OLLAMA_MODEL` | `qwen2.5:7b` | `qwen2.5:3b` | LLM model. PC handles 7B easily! |
+| `OLLAMA_NUM_CTX` | `4096` | `4096` | Context window size |
+| `TTS_VOICE` | `af_heart` | `af_heart` | Kokoro voice ID |
+| `WHISPER_MODEL` | `small` | `base`| STT size. PC uses `float16` CUDA. |
 
 ## 📄 License
-
 MIT — see [LICENSE](LICENSE).
 
 ---

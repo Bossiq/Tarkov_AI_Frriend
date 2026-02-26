@@ -225,15 +225,15 @@ class _AliveEngine:
         if abs(self._base_blend - self._base_blend_target) < 0.01:
             self._base_blend = self._base_blend_target
 
-        # Head micro-motion (random wander)
+        # Head motion (visible wander — alive feel)
         self._head_timer += dt
         if self._head_timer >= self._head_cd:
             self._head_timer = 0.0
-            self._head_cd = random.uniform(1.5, 4.0)
-            self._head_target_x = random.uniform(-2.5, 2.5)
-            self._head_target_y = random.uniform(-1.5, 1.5)
-        self._head_x = _lerp(self._head_x, self._head_target_x, 0.04)
-        self._head_y = _lerp(self._head_y, self._head_target_y, 0.04)
+            self._head_cd = random.uniform(1.0, 2.5)
+            self._head_target_x = random.uniform(-7.0, 7.0)
+            self._head_target_y = random.uniform(-4.0, 4.0)
+        self._head_x = _lerp(self._head_x, self._head_target_x, 0.06)
+        self._head_y = _lerp(self._head_y, self._head_target_y, 0.06)
 
         # Breathing
         self._breath_phase += dt * 1.1
@@ -289,9 +289,9 @@ class _AliveEngine:
                 sm = self._eye_mask.point(lambda p: int(p * self._eye_blend))
                 frame.paste(esrc, mask=sm)
 
-        # Head motion + breathing
-        breath_y = math.sin(self._breath_phase) * 1.5
-        breath_scale = 1.0 + math.sin(self._breath_phase * 0.5) * 0.003
+        # Head motion + breathing (visible — alive feel)
+        breath_y = math.sin(self._breath_phase) * 5.0
+        breath_scale = 1.0 + math.sin(self._breath_phase * 0.5) * 0.02
         dx = self._head_x
         dy = self._head_y + breath_y
 
@@ -591,7 +591,7 @@ class OverwatchGUI(ctk.CTk):
         mode_text = mode_labels.get(self._input_mode, "Auto")
         ctk.CTkLabel(inner, text=f"🎤 {mode_text}", font=ctk.CTkFont(size=11),
                      text_color=_TEXT2).pack(side="right", padx=(0, 12))
-        ctk.CTkLabel(inner, text="v16.0", font=ctk.CTkFont(size=11),
+        ctk.CTkLabel(inner, text="v0.16.0", font=ctk.CTkFont(size=11),
                      text_color=_MUTED).pack(side="right")
 
     # ══ PUBLIC API ════════════════════════════════════════════════════

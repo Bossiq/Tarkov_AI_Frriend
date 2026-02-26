@@ -334,7 +334,7 @@ class VoiceOutput:
             # Final normalization
             peak_new = np.max(np.abs(audio))
             if peak_new > 0.01:
-                audio = audio * (0.85 / peak_new)
+                audio = audio * (0.40 / peak_new)
 
         # Anti-click fade (15ms)
         fade_len = min(int(sample_rate * 15 / 1000), len(audio) // 4)
@@ -367,7 +367,9 @@ class VoiceOutput:
     def speak_streamed(self, sentences: Generator[str, None, None]) -> None:
         """Speak sentences as they stream from the LLM.
 
-        Batches all sentences into one synthesis for seamless speech.
+        Each sentence is synthesized separately with its own language
+        detection, preventing wrong-voice mixing (e.g. Romanian accent
+        reading English text).
         """
         full_response: list[str] = []
 
@@ -381,20 +383,19 @@ class VoiceOutput:
         if self._gui_callback:
             self._gui_callback(f"[PMC] {' '.join(full_response)}")
 
-        full_text = self._preprocess_for_speech(" ".join(full_response))
-        if not full_text.strip():
-            return
+        # Speak each sentence with its OWN language detection
+        for sentence in full_response:
+            clean = self._preprocess_for_speech(sentence)
+            if not clean.strip():
+                continue
+            lang = _detect_language(sentence)
 
-        lang = _detect_language(" ".join(full_response))
-
-        if self._edge_available and self._speak_edge(full_text, lang):
-            return
-
-        # Fallback: Kokoro (English only)
-        if self._kokoro is not None:
-            self._speak_kokoro(full_text)
-        else:
-            self._speak_say(full_text)
+            if self._edge_available and self._speak_edge(clean, lang):
+                continue
+            if self._kokoro is not None:
+                self._speak_kokoro(clean)
+            else:
+                self._speak_say(clean)
 
     # ── Kokoro single sentence ────────────────────────────────────────
     def _speak_kokoro(self, text: str) -> None:

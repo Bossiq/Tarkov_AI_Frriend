@@ -27,7 +27,7 @@
 | 🎤 **Voice Input** | Real-time speech recognition via faster-whisper (GPU, multilingual) |
 | 🧠 **Dual LLM** | Groq cloud (250+ tok/s, free) or Ollama local — auto-selects |
 | 🔊 **Neural TTS** | Microsoft edge-tts with per-sentence language detection |
-| 🎭 **Layered Avatar** | Independent mouth/eye/expression layers over anime sprite base |
+| 🎭 **Alive Avatar** | Continuous organic motion — never still, feels like a real co-streamer |
 | 🎵 **Lip Sync** | RMS amplitude → mouth region blend (20ms resolution) |
 | 👁️ **Eye Animation** | Multi-stage blinks with independent eye region compositing |
 | 😊 **Emotion Detection** | Keyword sentiment → expression overlay changes |

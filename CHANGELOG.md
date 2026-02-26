@@ -2,6 +2,23 @@
 
 All notable changes to PMC Overwatch are documented here.
 
+## [0.21.0] — 2026-02-26
+
+### Added
+- **Alive animation engine**: multi-frequency smoothed noise drives all motion
+- Character NEVER sits still — continuous organic micro-motion on head, gaze, scale
+- **Micro-expressions**: random smile flickers every 3-8 seconds like a real person
+- **Amplitude-synced head nods**: head bobs naturally during speech
+- **Listening lean**: avatar leans forward slightly when listening
+- **Breathing**: visible up/down + scale oscillation always active
+
+### Changed
+- Head/gaze motion uses `_SmoothedNoise` (3 overlapping sine waves) instead of lerp-to-random-target
+- All parameters use exponential smoothing for buttery transitions
+
+### Removed
+- Ear-piercing `winsound.Beep()` sounds on mode transitions
+
 ## [0.20.0] — 2026-02-26
 
 ### Added

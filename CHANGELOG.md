@@ -2,6 +2,21 @@
 
 All notable changes to PMC Overwatch are documented here.
 
+## [0.23.0] — 2026-02-26
+
+### Added
+- **Procedural live avatar**: entire character drawn from code — ZERO sprite images
+- Face shape, eyes (iris/pupil/highlights), mouth, eyebrows, nose, hair, shoulders
+- 2x supersampled rendering with LANCZOS downscale for anti-aliasing
+- Holographic post-processing on drawn output (scanlines, chromatic aberration)
+
+### Changed
+- Avatar pipeline: PIL procedural drawing replaces sprite compositing
+- Character is generated fresh every frame — truly alive, not image pasting
+- Gaze follows noise-driven targets, eyes track independently
+- Mouth shape varies (line → smile arc → open ellipse with teeth)
+- Hair sways organically with per-strand noise offsets
+
 ## [0.22.0] — 2026-02-26
 
 ### Added

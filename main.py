@@ -35,7 +35,8 @@ from logging_config import setup_logging  # noqa: E402
 
 setup_logging()
 
-from brain import Brain, detect_emotion  # noqa: E402
+from brain import Brain  # noqa: E402
+from expression_engine import detect_expression, Emotion  # noqa: E402
 from gui import OverwatchGUI  # noqa: E402
 from twitch_bot import TwitchBot  # noqa: E402
 from video_capture import VideoCapture  # noqa: E402
@@ -74,9 +75,13 @@ class PMCOverwatch:
         self._twitch_bot: Optional[TwitchBot] = None
         self._running = False
         self._latest_frame_path = "latest_frame.jpg"
+        self._barge_in_occurred = False  # set after barge-in to skip onset detection
 
-        # Hook up GUI toggle
+        # Hook up GUI toggle + mic selector
         self._gui.set_toggle_callback(self._on_toggle)
+        self._gui.set_mic_callback(
+            lambda idx: self._vi.set_device(idx, gui_log=self._gui.log)
+        )
 
         # Initialize brain in background so GUI appears instantly
         threading.Thread(
@@ -91,6 +96,9 @@ class PMCOverwatch:
             engine = self._brain._engine
             model = self._brain._model
             self._gui.log(f"[Brain] Online ({engine}: {model})")
+            self._gui.log("[Brain] Warming up model …")
+            self._brain._warmup()
+            self._gui.log("[Brain] Model ready (warm)")
         except ConnectionError as exc:
             self._gui.log(f"[!] {exc}")
             logger.error("Brain init failed: %s", exc)
@@ -277,10 +285,19 @@ class PMCOverwatch:
         if use_audio:
             try:
                 self._gui.set_status("Listening...")
-                audio_path = self._vi.listen(output_filename="current_request.wav")
+                # After barge-in, skip onset detection — user is already speaking
+                assume = self._barge_in_occurred
+                self._barge_in_occurred = False
+                audio_path = self._vi.listen(
+                    output_filename="current_request.wav",
+                    assume_speaking=assume,
+                )
                 if not audio_path:
                     return
 
+                # Instant feedback — user sees "Processing" the moment they stop talking
+                self._gui.set_status("Processing...")
+                self._gui.set_vis_mode("thinking")
                 self._gui.log("[STT] Speech captured, transcribing...")
                 self._gui.set_status("Transcribing...")
                 transcription = self._vi.transcribe(audio_path)
@@ -314,25 +331,75 @@ class PMCOverwatch:
 
         response_start = time.monotonic()
 
-        # Collect sentences and detect emotion
-        sentences = self._brain.stream_sentences(text_prompt)
-        first_emotion_set = False
+        # Clear any previous interrupt state
+        self._vo.clear_interrupt()
+        self._brain._interrupt.clear()
 
-        def _sentences_with_emotion():
-            nonlocal first_emotion_set
+        # Collect sentences and detect expression per sentence
+        sentences = self._brain.stream_sentences(text_prompt)
+
+        def _sentences_with_expression():
             for sentence in sentences:
-                if not first_emotion_set:
-                    emotion = detect_emotion(sentence)
-                    self._gui.set_emotion(emotion)
-                    first_emotion_set = True
+                expression = detect_expression(sentence)
+                self._gui.set_expression(expression)
+                logger.debug("Expression: %s for '%s'", expression.value, sentence[:50])
                 yield sentence
 
-        self._vo.speak_streamed(_sentences_with_emotion())
-        elapsed = time.monotonic() - response_start
-        logger.info("Response cycle completed in %.1fs", elapsed)
+        # ── Barge-in: monitor mic during playback ─────────────────────
+        monitor_stop = threading.Event()
+        self._vi._bargein_detected.clear()
+        self._vi._bargein_frames = []
 
-        # Reset emotion after speaking
-        self._gui.set_emotion("neutral")
+        def _barge_in_monitor():
+            """Background thread: watch mic for user speech during TTS.
+
+            The monitor keeps its InputStream open and records audio after
+            detection, bridging the gap until ``listen()`` opens its own.
+            """
+            # Wait until audio playback actually starts before monitoring.
+            if not self._vo._speaking_started.wait(timeout=60):
+                return
+            if monitor_stop.is_set():
+                return
+            self._vi.monitor_for_speech(monitor_stop)
+
+        def _barge_in_trigger():
+            """Wait for the detection event, then interrupt output."""
+            self._vi._bargein_detected.wait()
+            if not monitor_stop.is_set():
+                logger.info("Barge-in detected — interrupting playback")
+                self._vo.request_interrupt()
+                self._brain._interrupt.set()
+
+        monitor_thread = threading.Thread(
+            target=_barge_in_monitor, name="BargeInMonitor", daemon=True
+        )
+        trigger_thread = threading.Thread(
+            target=_barge_in_trigger, name="BargeInTrigger", daemon=True
+        )
+        monitor_thread.start()
+        trigger_thread.start()
+
+        try:
+            self._vo.speak_streamed(_sentences_with_expression())
+        finally:
+            # Stop the monitor — it will finish capturing and exit
+            monitor_stop.set()
+            self._vi._bargein_detected.set()  # unblock trigger thread
+            monitor_thread.join(timeout=2.0)
+            trigger_thread.join(timeout=1.0)
+
+        elapsed = time.monotonic() - response_start
+
+        if self._vo.was_interrupted:
+            logger.info("Response interrupted by user after %.1fs", elapsed)
+            self._gui.log("[PMC] …interrupted")
+            self._barge_in_occurred = True  # next listen() skips onset detection
+        else:
+            logger.info("Response cycle completed in %.1fs", elapsed)
+
+        # Reset expression after speaking
+        self._gui.reset_expression()
 
         # Revert to listening or offline
         if self._running:

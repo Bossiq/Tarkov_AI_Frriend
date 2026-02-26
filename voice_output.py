@@ -42,7 +42,7 @@ _VOICES_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/mod
 
 # ── edge-tts Voice Mapping ───────────────────────────────────────────
 _EDGE_VOICES = {
-    "en": "en-US-JennyNeural",             # warm female — natural
+    "en": "en-US-EmmaNeural",               # cheerful young female — clear & conversational
     "ru": "ru-RU-SvetlanaNeural",           # natural female Russian
     "ro": "ro-RO-AlinaNeural",              # female Romanian (only option)
     "de": "de-DE-KatjaNeural",              # German female fallback
@@ -53,7 +53,7 @@ _EDGE_VOICES = {
 _DEFAULT_VOICE = "af_heart"
 _DEFAULT_SPEED = 1.1
 _DEFAULT_LANG = "en-us"
-_DEFAULT_EDGE_RATE = "+0%"
+_DEFAULT_EDGE_RATE = "+60%"
 _SAY_TIMEOUT_S = 30
 _AMPLITUDE_CHUNK_MS = 20  # RMS calculation every 20ms
 
@@ -204,6 +204,11 @@ class VoiceOutput:
         self._kokoro_lock = threading.Lock()
         self._edge_available = False
 
+        # ── Barge-in interrupt support ─────────────────────────────
+        self._interrupt = threading.Event()
+        self._was_interrupted = False
+        self._speaking_started = threading.Event()  # set when audio playback begins
+
         # Check edge-tts availability
         try:
             import edge_tts  # noqa: F401
@@ -214,6 +219,23 @@ class VoiceOutput:
 
         # Initialize Kokoro in background as fallback
         threading.Thread(target=self._init_kokoro, name="KokoroInit", daemon=True).start()
+
+    # ── Barge-in API ──────────────────────────────────────────────────
+    def request_interrupt(self) -> None:
+        """Signal the output to stop speaking immediately."""
+        self._interrupt.set()
+        logger.info("Voice output interrupt requested")
+
+    def clear_interrupt(self) -> None:
+        """Reset the interrupt flag before a new utterance."""
+        self._interrupt.clear()
+        self._was_interrupted = False
+        self._speaking_started.clear()
+
+    @property
+    def was_interrupted(self) -> bool:
+        """True if the last speak call was cut short by an interrupt."""
+        return self._was_interrupted
 
     # ── Kokoro initialisation ─────────────────────────────────────────
     def _init_kokoro(self) -> None:
@@ -240,10 +262,16 @@ class VoiceOutput:
     # ══════════════════════════════════════════════════════════════════
     #  AUDIO PLAYBACK WITH AMPLITUDE CALLBACK
     # ══════════════════════════════════════════════════════════════════
-    def _play_with_amplitude(self, audio: np.ndarray, sr: int) -> None:
-        """Play audio while firing amplitude callbacks for lip-sync."""
+    def _play_with_amplitude(self, audio: np.ndarray, sr: int) -> bool:
+        """Play audio while firing amplitude callbacks for lip-sync.
+
+        Returns True if playback completed, False if interrupted.
+        """
         if self._on_speak_start:
             self._on_speak_start()
+        self._speaking_started.set()  # signal that audio is actually playing
+
+        interrupted = False
 
         # Mono conversion for amplitude calculation
         if audio.ndim > 1:
@@ -258,6 +286,13 @@ class VoiceOutput:
                                  dtype='float32') as stream:
                 pos = 0
                 while pos < len(audio):
+                    # ── Barge-in check (every ~30ms chunk) ────────
+                    if self._interrupt.is_set():
+                        logger.info("Playback interrupted at %.1f%%",
+                                    pos / len(audio) * 100)
+                        interrupted = True
+                        break
+
                     end = min(pos + chunk_size, len(audio))
                     chunk = audio[pos:end]
                     stream.write(chunk if chunk.ndim > 1 else chunk.reshape(-1, 1))
@@ -281,6 +316,8 @@ class VoiceOutput:
 
         if self._on_speak_end:
             self._on_speak_end()
+
+        return not interrupted
 
     # ══════════════════════════════════════════════════════════════════
     #  EDGE-TTS SYNTHESIS
@@ -431,13 +468,19 @@ class VoiceOutput:
     def speak_streamed(self, sentences: Generator[str, None, None]) -> None:
         """Speak sentences as they stream from the LLM.
 
-        Each sentence is synthesized separately with its own language
-        detection, preventing wrong-voice mixing (e.g. Romanian accent
-        reading English text).
+        Batches consecutive same-language sentences into a single TTS
+        call to eliminate inter-sentence pauses.  Only starts a new
+        TTS call when the detected language changes.
+
+        Supports barge-in: if ``_interrupt`` is set, remaining sentences
+        are skipped and ``_was_interrupted`` is set to True.
         """
         full_response: list[str] = []
 
         for sentence in sentences:
+            if self._interrupt.is_set():
+                logger.info("Stopped consuming LLM stream (barge-in)")
+                break
             if sentence.strip():
                 full_response.append(sentence)
 
@@ -447,19 +490,44 @@ class VoiceOutput:
         if self._gui_callback:
             self._gui_callback(f"[PMC] {' '.join(full_response)}")
 
-        # Speak each sentence with its OWN language detection
+        # ── Batch consecutive same-language sentences ─────────────
+        batches: list[tuple[str, str]] = []  # (combined_text, lang)
+        current_parts: list[str] = []
+        current_lang: str | None = None
+
         for sentence in full_response:
             clean = self._preprocess_for_speech(sentence)
             if not clean.strip():
                 continue
             lang = _detect_language(sentence)
+            if current_lang is None:
+                current_lang = lang
+            if lang != current_lang:
+                # Language switched — flush current batch
+                batches.append((" ".join(current_parts), current_lang))
+                current_parts = []
+                current_lang = lang
+            current_parts.append(clean)
 
-            if self._edge_available and self._speak_edge(clean, lang):
+        if current_parts and current_lang:
+            batches.append((" ".join(current_parts), current_lang))
+
+        # ── Speak each batch ──────────────────────────────────────
+        for text, lang in batches:
+            if self._interrupt.is_set():
+                logger.info("Speech interrupted between batches (barge-in)")
+                self._was_interrupted = True
+                break
+
+            if self._edge_available and self._speak_edge(text, lang):
+                if self._interrupt.is_set():
+                    self._was_interrupted = True
+                    break
                 continue
             if self._kokoro is not None:
-                self._speak_kokoro(clean)
+                self._speak_kokoro(text)
             else:
-                self._speak_say(clean)
+                self._speak_say(text)
 
     # ── Kokoro single sentence ────────────────────────────────────────
     def _speak_kokoro(self, text: str) -> None:

@@ -2,7 +2,25 @@
 
 All notable changes to PMC Overwatch are documented here.
 
-## [16.0] — 2026-02-26
+## [0.17.0] — 2026-02-26
+
+### Added
+- **Live vector face**: Canvas-drawn face with head, eyes (iris/pupil/eyelid), eyebrows, mouth, nose, hair, ears
+- Smooth eyelid blinks with multi-stage animation
+- Gaze wander (iris/pupil tracking)
+- Bezier mouth morphing driven by audio amplitude (teeth visible when wide open)
+- Eyebrow expressions: raised (attentive), furrowed (thinking), relaxed (idle)
+- Per-mode facial expressions: attentive listening, thoughtful thinking, animated speaking
+
+### Changed
+- Removed PIL/Image dependency for avatar rendering
+- Removed PNG sprite system (`_AliveEngine`)
+- FPS increased from 24 to 30
+
+### Removed
+- Sprite-based avatar engine (replaced entirely by vector rendering)
+
+## [0.16.0] — 2026-02-26
 
 ### Added
 - **Audio-driven lip sync**: RMS amplitude callback (20ms chunks) maps to mouth poses

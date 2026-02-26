@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>Real-time voice AI companion for Escape from Tarkov</strong><br/>
-  Anime avatar with lip-sync • Multilingual speech • Groq/Ollama LLM • Push-to-Talk • Twitch
+  Live vector face • Audio lip-sync • Groq/Ollama LLM • Push-to-Talk • Twitch
 </p>
 
 <p align="center">
@@ -26,12 +26,13 @@
 |---------|-------------|
 | 🎤 **Voice Input** | Real-time speech recognition via faster-whisper (GPU accelerated) |
 | 🧠 **Dual LLM** | Groq cloud (250+ tok/s, free) or Ollama local — auto-selects |
-| 🔊 **Neural TTS** | Microsoft edge-tts with AriaNeural (EN), DariyaNeural (RU), AlinaNeural (RO) |
-| 🎭 **Anime Avatar** | Region-composited animation with audio-driven lip sync |
-| 🎵 **Lip Sync** | Real-time RMS amplitude → mouth pose mapping (20ms resolution) |
-| 😊 **Emotion Detection** | Keyword-based sentiment analysis drives avatar expressions |
-| 🎮 **Push-to-Talk** | Three input modes: Auto VAD, Toggle (F4), Hold (F4) |
-| 🌐 **Multilingual** | English, Russian, Romanian — auto-detection or manual override |
+| 🔊 **Neural TTS** | Microsoft edge-tts with per-sentence language detection |
+| 🎭 **Live Face** | Canvas-drawn vector face with eyes, eyebrows, mouth, nose — no images |
+| 🎵 **Lip Sync** | RMS amplitude → mouth opening + teeth visibility (20ms resolution) |
+| 👁️ **Eye Animation** | Multi-stage blinks, gaze wander, iris/pupil tracking |
+| 😊 **Emotion Detection** | Keyword sentiment → eyebrow + mouth expression changes |
+| 🎤 **Push-to-Talk** | Three input modes: Auto VAD, Toggle (F4), Hold (F4) |
+| 🌐 **Multilingual** | English, Russian, Romanian — per-sentence voice selection |
 | 📺 **Twitch Bot** | Optional chat integration for stream interactions |
 | 🎮 **Tarkov Knowledge** | Built-in quest reference database for accurate game info |
 

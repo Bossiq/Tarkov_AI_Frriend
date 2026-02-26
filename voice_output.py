@@ -41,11 +41,11 @@ _VOICES_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/mod
 
 # ── edge-tts Voice Mapping ───────────────────────────────────────────
 _EDGE_VOICES = {
-    "en": "en-US-JennyNeural",
-    "ru": "ru-RU-SvetlanaNeural",
+    "en": "en-US-AriaNeural",
+    "ru": "ru-RU-DariyaNeural",
     "ro": "ro-RO-AlinaNeural",
 }
-_EDGE_RATE = "-5%"  # Slightly slower for more natural pacing
+_EDGE_RATE = "+0%"  # Normal rate for best quality
 
 # ── Defaults ─────────────────────────────────────────────────────────
 _DEFAULT_VOICE = "af_heart"
@@ -286,12 +286,10 @@ class VoiceOutput:
         peak = np.max(np.abs(audio))
         if peak > 0.01:
             audio = audio * (0.85 / peak)
-        fade_len = min(int(sample_rate * 15 / 1000), len(audio) // 4)
+        fade_len = min(int(sample_rate * 8 / 1000), len(audio) // 4)
         if fade_len > 1:
             audio[:fade_len] *= np.linspace(0.0, 1.0, fade_len, dtype=np.float32)
             audio[-fade_len:] *= np.linspace(1.0, 0.0, fade_len, dtype=np.float32)
-        padding = np.zeros(int(sample_rate * 0.05), dtype=np.float32)
-        audio = np.concatenate([audio, padding])
         return audio
 
     # ══════════════════════════════════════════════════════════════════
@@ -323,23 +321,32 @@ class VoiceOutput:
         """
         full_response: list[str] = []
 
-        # If edge-tts available, use it for each sentence directly
-        if self._edge_available:
-            for sentence in sentences:
-                if not sentence.strip():
-                    continue
+        # Collect all sentences first
+        for sentence in sentences:
+            if sentence.strip():
                 full_response.append(sentence)
-                clean = self._preprocess_for_speech(sentence)
-                if not clean.strip():
-                    continue
-                lang = _detect_language(sentence)
-                if not self._speak_edge(clean, lang):
-                    # Fallback to Kokoro for this sentence
-                    if self._kokoro is not None:
-                        self._speak_kokoro(clean)
-            if self._gui_callback and full_response:
-                self._gui_callback(f"[PMC] {' '.join(full_response)}")
+
+        if not full_response:
             return
+
+        # Log the full response
+        if self._gui_callback:
+            self._gui_callback(f"[PMC] {' '.join(full_response)}")
+
+        # Batch all sentences into one text for seamless synthesis
+        full_text = self._preprocess_for_speech(" ".join(full_response))
+        if not full_text.strip():
+            return
+
+        lang = _detect_language(" ".join(full_response))
+
+        if self._edge_available and self._speak_edge(full_text, lang):
+            return
+
+        # Fallback: Kokoro
+        if self._kokoro is not None:
+            self._speak_kokoro(full_text)
+        return
 
         # No edge-tts: use Kokoro async pipeline
         if self._kokoro is None:

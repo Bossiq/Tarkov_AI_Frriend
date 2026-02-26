@@ -27,7 +27,7 @@
 | 🎤 **Voice Input** | Real-time speech recognition via faster-whisper (GPU accelerated) |
 | 🧠 **Dual LLM** | Groq cloud (250+ tok/s, free) or Ollama local — auto-selects |
 | 🔊 **Neural TTS** | Microsoft edge-tts with per-sentence language detection |
-| 🎭 **Live Face** | Canvas-drawn vector face with eyes, eyebrows, mouth, nose — no images |
+| 🎭 **Live Avatar** | Anime girl sprite base + PIL-drawn animated mouth/eyes overlay |
 | 🎵 **Lip Sync** | RMS amplitude → mouth opening + teeth visibility (20ms resolution) |
 | 👁️ **Eye Animation** | Multi-stage blinks, gaze wander, iris/pupil tracking |
 | 😊 **Emotion Detection** | Keyword sentiment → eyebrow + mouth expression changes |

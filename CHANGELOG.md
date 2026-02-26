@@ -2,6 +2,19 @@
 
 All notable changes to PMC Overwatch are documented here.
 
+## [0.18.0] — 2026-02-26
+
+### Added
+- **Premium hybrid renderer**: anime girl sprite base + PIL animated overlays
+- Amplitude-driven mouth: elliptical mask fades talk sprites with GaussianBlur edges
+- Eyelid curtains: skin-sampled rectangles slide down for natural blinks
+- Smooth transition between neutral/talk_a/talk_b/smile/think sprites
+
+### Changed
+- Replaced bare Canvas vector face with high-quality sprite hybrid
+- Restored PIL/Pillow dependency for avatar compositing
+- Better head motion (offset via crop, breathing via scale)
+
 ## [0.17.0] — 2026-02-26
 
 ### Added

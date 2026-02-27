@@ -22,6 +22,7 @@ import re
 import subprocess
 import tempfile
 import threading
+import time
 import urllib.request
 from pathlib import Path
 from typing import Callable, Generator, Optional
@@ -41,21 +42,32 @@ _ONNX_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model
 _VOICES_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin"
 
 # ── edge-tts Voice Mapping ───────────────────────────────────────────
+# Ava Multilingual is Microsoft's flagship neural voice (2024) —
+# the most natural prosody and human-like quality available in edge-tts.
 _EDGE_VOICES = {
-    "en": "en-US-EmmaNeural",               # cheerful young female — clear & conversational
-    "ru": "ru-RU-SvetlanaNeural",           # natural female Russian
-    "ro": "ro-RO-AlinaNeural",              # female Romanian (only option)
-    "de": "de-DE-KatjaNeural",              # German female fallback
-    "fr": "fr-FR-DeniseNeural",             # French female fallback
+    "en": "en-US-AvaMultilingualNeural",     # Microsoft's best — ultra-natural female
+    "ru": "ru-RU-SvetlanaNeural",            # natural female Russian (only option)
+    "ro": "ro-RO-AlinaNeural",               # female Romanian  (only option)
+    "de": "de-DE-KatjaNeural",               # German female fallback
+    "fr": "fr-FR-DeniseNeural",              # French female fallback
+}
+
+# Per-language rate overrides — Romanian and Russian neural voices
+# sound unnatural when sped up, so cap them at +0% regardless of
+# the user's EDGE_RATE setting (which is tuned for English).
+_EDGE_RATE_OVERRIDES = {
+    "ro": "+0%",
+    "ru": "+0%",
 }
 
 # ── Defaults ─────────────────────────────────────────────────────────
 _DEFAULT_VOICE = "af_heart"
 _DEFAULT_SPEED = 1.1
 _DEFAULT_LANG = "en-us"
-_DEFAULT_EDGE_RATE = "+60%"
+_DEFAULT_EDGE_RATE = "+0%"
 _SAY_TIMEOUT_S = 30
 _AMPLITUDE_CHUNK_MS = 20  # RMS calculation every 20ms
+_POST_TTS_COOLDOWN = 0.3  # seconds of silence after TTS before re-listening
 
 # ── Language detection patterns ──────────────────────────────────────
 _CYRILLIC = re.compile(r'[\u0400-\u04FF]')
@@ -155,12 +167,74 @@ def _number_to_words(n: int) -> str:
     return str(n)
 
 
-# ── Romanian common words (for text without diacritics) ──────────────
-_ROMANIAN_WORDS = re.compile(
-    r'\b(este|sunt|pentru|care|acest|acesta|aceasta|unde|'
-    r'cum|bine|salut|mulțumesc|multumesc|da|nu|și|si|'
-    r'sau|mai|foarte|aici|acolo|trebuie|poate|'
-    r'merge|vine|face|spune|vrea|stiu|stii)\b',
+# ── Language detection word sets ─────────────────────────────────────
+# Words that are UNIQUELY Romanian (won't appear in English text).
+# A single match is enough to classify as Romanian.
+_RO_UNIQUE = re.compile(
+    r'\b('
+    # Pronouns / articles
+    r'eu|tu|el|ea|noi|voi|ei|ele|'
+    r'meu|mea|mei|mele|tau|ta|tai|tale|'
+    r'lui|lor|nostru|nostra|vostru|voastra|'
+    # Verbs — common forms
+    r'sunt|esti|este|suntem|sunteti|'
+    r'eram|erai|era|eram|erati|erau|'
+    r'fost|fi|fii|fie|fiind|'
+    r'fac|faci|facem|faceti|faca|facut|'
+    r'stiu|stii|stie|stim|stiti|'
+    r'vreau|vrei|vrea|vrem|vreti|'
+    r'pot|poti|poate|putem|puteti|putea|'
+    r'trebuie|trebui|'
+    r'spun|spui|spune|spunem|spuneti|spus|'
+    r'merg|mergi|merge|mergem|mergeti|mers|'
+    r'vin|vii|vine|venim|veniti|venit|'
+    r'dau|dai|dam|dati|dat|'
+    r'iau|iei|ia|luam|luati|luat|'
+    r'vad|vezi|vede|vedem|vedeti|vazut|'
+    r'aud|auzi|aude|auzit|'
+    r'cred|crezi|crede|crezut|'
+    r'zic|zici|zice|zicem|zis|'
+    # Prepositions / conjunctions
+    r'pentru|despre|dintre|dintr|catre|'
+    r'prin|peste|langa|intre|inainte|'
+    r'dupa|fara|pana|contra|'
+    r'daca|deci|insa|deoarece|fiindca|'
+    r'totusi|asadar|altfel|'
+    # Adverbs / common words
+    r'acum|inca|apoi|deja|doar|chiar|mereu|'
+    r'niciodata|intotdeauna|probabil|'
+    r'oriunde|oricum|oricand|oricine|tocmai|'
+    r'foarte|bine|rau|acolo|aici|'
+    r'nimic|nimeni|totul|ceva|cineva|fiecare|'
+    # Common nouns / adjectives
+    r'frumos|mare|mic|bun|buna|nou|vechi|'
+    r'mult|putin|repede|incet|'
+    # Greetings / interjections
+    r'salut|buna|noroc|multumesc|te rog|'
+    r'hai|haide|gata|destul|'
+    # Question words
+    r'ce|cine|cand|unde|cat|de ce|cum'
+    r')\b',
+    re.IGNORECASE
+)
+
+# Words that MIGHT be Romanian but could also appear in other contexts.
+# Need 2+ to confirm.
+_RO_COMMON = re.compile(
+    r'\b(da|nu|si|sau|mai|la|pe|cu|din|am|ai|a|o|un|una|sa|ce)\b',
+    re.IGNORECASE
+)
+
+# Common transliterated Russian words (when LLM writes Russian in Latin script)
+_RU_TRANSLIT = re.compile(
+    r'\b('
+    r'privet|zdorovo|nu|da|net|'
+    r'spasibo|pozhaluysta|khorosho|'
+    r'davay|poydem|brat|bratishka|bratan|'
+    r'kak|dela|chto|gde|kogda|pochemu|'
+    r'mozhno|nado|nyet|harasho|'
+    r'poka|dosvidaniya|zdravstvuyte'
+    r')\b',
     re.IGNORECASE
 )
 
@@ -168,18 +242,45 @@ _ROMANIAN_WORDS = re.compile(
 def _detect_language(text: str) -> str:
     """Detect language from text content. Returns 'ru', 'ro', or 'en'.
 
-    Uses character patterns for Cyrillic, diacritics for Romanian,
-    and common Romanian words as fallback for text without diacritics.
+    Uses a multi-signal scoring approach:
+      1. Cyrillic characters → instant Russian
+      2. Romanian diacritics (ă, â, î, ș, ț) → instant Romanian
+      3. Uniquely Romanian words → 1 match = Romanian
+      4. Common short Romanian words (da, nu, si) → 2+ matches = Romanian
+      5. Transliterated Russian words → fallback Russian detection
+      6. Default → English
     """
+    # Level 1: Character-based (instant, unambiguous)
     if _CYRILLIC.search(text):
         return "ru"
     if _ROMANIAN_CHARS.search(text):
         return "ro"
-    # Check for common Romanian words (text without diacritics)
-    matches = _ROMANIAN_WORDS.findall(text)
-    if len(matches) >= 2:  # at least 2 Romanian words to be confident
+
+    # Level 2: Uniquely Romanian words (1 match = confident)
+    unique_ro = _RO_UNIQUE.findall(text)
+    if unique_ro:
+        logger.debug("Romanian detected (unique words: %s)", unique_ro[:3])
         return "ro"
+
+    # Level 3: Common short Romanian words (ambiguous alone, 2+ = Romanian)
+    common_ro = _RO_COMMON.findall(text)
+    if len(common_ro) >= 2:
+        logger.debug("Romanian detected (common words: %s)", common_ro[:4])
+        return "ro"
+
+    # Level 4: Transliterated Russian
+    if _RU_TRANSLIT.search(text):
+        return "ru"
+
     return "en"
+
+
+# ── macOS 'say' voice mapping ────────────────────────────────────────
+_SAY_VOICES = {
+    "en": "Daniel",
+    "ro": "Ioana",
+    "ru": "Milena",
+}
 
 
 class VoiceOutput:
@@ -203,6 +304,17 @@ class VoiceOutput:
         self._kokoro = None
         self._kokoro_lock = threading.Lock()
         self._edge_available = False
+        self._language_hint: str = "en"          # Hint from Whisper detection
+
+        # If the user pinned a language via WHISPER_LANGUAGE, force ALL
+        # TTS output to that language — eliminates mid-response voice
+        # switches caused by per-sentence language detection.
+        _wl = os.getenv("WHISPER_LANGUAGE", "auto").strip().lower()
+        self._forced_lang: str | None = _wl if _wl and _wl != "auto" else None
+
+        # Persistent asyncio loop for edge-tts (avoid creating/destroying per call)
+        self._edge_loop = asyncio.new_event_loop()
+        self._edge_tts_mod = None  # cached module import
 
         # ── Barge-in interrupt support ─────────────────────────────
         self._interrupt = threading.Event()
@@ -236,6 +348,12 @@ class VoiceOutput:
     def was_interrupted(self) -> bool:
         """True if the last speak call was cut short by an interrupt."""
         return self._was_interrupted
+
+    def set_language_hint(self, lang: str) -> None:
+        """Set a language hint from Whisper detection for TTS fallback."""
+        if lang in ("en", "ro", "ru"):
+            self._language_hint = lang
+            logger.debug("TTS language hint set to: %s", lang)
 
     # ── Kokoro initialisation ─────────────────────────────────────────
     def _init_kokoro(self) -> None:
@@ -311,6 +429,11 @@ class VoiceOutput:
             if self._on_amplitude:
                 self._on_amplitude(0.0)
 
+            # Post-TTS cooldown — brief silence so the mic doesn't
+            # immediately capture the tail of TTS audio as speech
+            if not interrupted:
+                time.sleep(_POST_TTS_COOLDOWN)
+
         except Exception:
             logger.exception("Audio playback error")
 
@@ -325,24 +448,26 @@ class VoiceOutput:
     def _speak_edge(self, text: str, lang: str) -> bool:
         """Synthesize and play speech via edge-tts. Returns True on success."""
         try:
-            import edge_tts
+            if self._edge_tts_mod is None:
+                import edge_tts
+                self._edge_tts_mod = edge_tts
+            edge_tts = self._edge_tts_mod
 
             voice = _EDGE_VOICES.get(lang, _EDGE_VOICES["en"])
-            logger.debug("edge-tts: voice=%s lang=%s text=%s", voice, lang, text[:60])
+            # Use per-language rate override if available (RO/RU stay at natural pace)
+            rate = _EDGE_RATE_OVERRIDES.get(lang, self._edge_rate)
+            logger.debug("edge-tts: voice=%s lang=%s rate=%s text=%s", voice, lang, rate, text[:60])
 
             async def _synthesize():
-                communicate = edge_tts.Communicate(text, voice, rate=self._edge_rate)
+                communicate = edge_tts.Communicate(text, voice, rate=rate)
                 audio_data = b""
                 async for chunk in communicate.stream():
                     if chunk["type"] == "audio":
                         audio_data += chunk["data"]
                 return audio_data
 
-            loop = asyncio.new_event_loop()
-            try:
-                mp3_bytes = loop.run_until_complete(_synthesize())
-            finally:
-                loop.close()
+            # Reuse persistent loop instead of creating/destroying per call
+            mp3_bytes = self._edge_loop.run_until_complete(_synthesize())
 
             if not mp3_bytes:
                 logger.warning("edge-tts returned empty audio")
@@ -415,8 +540,23 @@ class VoiceOutput:
     # ══════════════════════════════════════════════════════════════════
     @staticmethod
     def _postprocess_audio(samples: np.ndarray, sample_rate: int) -> np.ndarray:
-        """Normalize + dynamic range compression + anti-click fade."""
+        """Normalize + dynamic range compression + anti-click fade + strip trailing artifacts."""
         audio = samples.copy().astype(np.float32)
+        if len(audio) == 0:
+            return audio
+
+        # ── Strip trailing near-silence (kills edge-tts MP3 decoder beeps) ──
+        # Walk backwards from end, trimming samples below a noise floor.
+        # The beep artifact is typically a short burst at the very end.
+        trim_threshold = 0.005
+        end = len(audio)
+        while end > 0 and abs(audio[end - 1]) < trim_threshold:
+            end -= 1
+        # Keep at least 80% of original audio (safety)
+        min_keep = int(len(audio) * 0.8)
+        end = max(end, min_keep)
+        audio = audio[:end]
+
         if len(audio) == 0:
             return audio
 
@@ -437,8 +577,8 @@ class VoiceOutput:
             if peak_new > 0.01:
                 audio = audio * (0.40 / peak_new)
 
-        # Anti-click fade (15ms)
-        fade_len = min(int(sample_rate * 15 / 1000), len(audio) // 4)
+        # Anti-click fade (50ms — longer fade eliminates edge-tts tail artifacts)
+        fade_len = min(int(sample_rate * 50 / 1000), len(audio) // 4)
         if fade_len > 1:
             audio[:fade_len] *= np.linspace(0.0, 1.0, fade_len, dtype=np.float32)
             audio[-fade_len:] *= np.linspace(1.0, 0.0, fade_len, dtype=np.float32)
@@ -469,65 +609,111 @@ class VoiceOutput:
         """Speak sentences as they stream from the LLM.
 
         Batches consecutive same-language sentences into a single TTS
-        call to eliminate inter-sentence pauses.  Only starts a new
-        TTS call when the detected language changes.
+        call to eliminate inter-sentence pauses.  Flushes and speaks
+        each batch as soon as the language changes or the stream ends.
 
         Supports barge-in: if ``_interrupt`` is set, remaining sentences
         are skipped and ``_was_interrupted`` is set to True.
         """
         full_response: list[str] = []
+        current_parts: list[str] = []
+        current_lang: str | None = None
+        first_utterance = True
+
+        def _flush_batch():
+            """Speak the current batch and clear it."""
+            nonlocal current_parts, current_lang, first_utterance
+            if not current_parts or not current_lang:
+                return
+            text = " ".join(current_parts)
+            current_parts = []
+            prev_lang = current_lang
+            current_lang = None
+
+            if first_utterance:
+                self._speaking_started.set()
+                first_utterance = False
+
+            if self._edge_available and self._speak_edge(text, prev_lang):
+                if self._interrupt.is_set():
+                    self._was_interrupted = True
+                return
+            # Kokoro is English-only — skip for non-English text
+            if self._kokoro is not None and prev_lang == "en":
+                self._speak_kokoro(text)
+            else:
+                self._speak_say(text, prev_lang or "en")
 
         for sentence in sentences:
             if self._interrupt.is_set():
                 logger.info("Stopped consuming LLM stream (barge-in)")
+                self._was_interrupted = True
                 break
-            if sentence.strip():
-                full_response.append(sentence)
+            if not sentence.strip():
+                continue
 
-        if not full_response:
-            return
-
-        if self._gui_callback:
-            self._gui_callback(f"[PMC] {' '.join(full_response)}")
-
-        # ── Batch consecutive same-language sentences ─────────────
-        batches: list[tuple[str, str]] = []  # (combined_text, lang)
-        current_parts: list[str] = []
-        current_lang: str | None = None
-
-        for sentence in full_response:
+            full_response.append(sentence)
             clean = self._preprocess_for_speech(sentence)
             if not clean.strip():
                 continue
-            lang = _detect_language(sentence)
+
+            # ── Voice language selection ──────────────────────────────
+            # Primary: use _language_hint (set from Whisper each utterance)
+            # Override: only when text is CLEARLY a different language
+            #   (e.g. Russian text in a translation, or strong English markers)
+            # This ensures the voice always matches what the user spoke,
+            # while still allowing translation requests to use correct voices.
+            detected = _detect_language(sentence)
+            hint = self._language_hint  # from most recent Whisper detection
+
+            # Safeguard: if >30% of letters are Cyrillic → always Russian
+            # This overrides everything and prevents misrouting Russian text
+            letters = [c for c in sentence if c.isalpha()]
+            if letters:
+                cyrillic_count = sum(1 for c in letters if '\u0400' <= c <= '\u04FF')
+                if cyrillic_count / len(letters) > 0.3:
+                    detected = "ru"
+
+            if detected == hint:
+                # Detection agrees with Whisper hint — use it
+                lang = detected
+            elif detected == "ru":
+                # Russian (Cyrillic) is very distinct — always trust it
+                lang = "ru"
+            elif detected == "ro":
+                # Romanian detected — always trust it (diacritics are unambiguous)
+                lang = "ro"
+            elif detected == "en" and hint != "en":
+                # Detected English but user was speaking non-English.
+                # Only trust if there are CLEAR English markers.
+                english_words = re.findall(
+                    r'\b(the|is|are|was|were|have|has|had|will|would|'
+                    r'can|could|should|this|that|with|from|your|'
+                    r'about|just|like|what|when|where|how|why|'
+                    r'hello|yes|no|please|thank|welcome|good)\b',
+                    sentence, re.IGNORECASE
+                )
+                lang = "en" if len(english_words) >= 2 else hint
+            else:
+                # Default: trust the Whisper hint
+                lang = hint
+
             if current_lang is None:
                 current_lang = lang
+
             if lang != current_lang:
-                # Language switched — flush current batch
-                batches.append((" ".join(current_parts), current_lang))
-                current_parts = []
+                # Language switched — flush current batch before starting new one
+                _flush_batch()
                 current_lang = lang
+
             current_parts.append(clean)
 
-        if current_parts and current_lang:
-            batches.append((" ".join(current_parts), current_lang))
+        # Flush any remaining batch
+        if not self._interrupt.is_set():
+            _flush_batch()
 
-        # ── Speak each batch ──────────────────────────────────────
-        for text, lang in batches:
-            if self._interrupt.is_set():
-                logger.info("Speech interrupted between batches (barge-in)")
-                self._was_interrupted = True
-                break
-
-            if self._edge_available and self._speak_edge(text, lang):
-                if self._interrupt.is_set():
-                    self._was_interrupted = True
-                    break
-                continue
-            if self._kokoro is not None:
-                self._speak_kokoro(text)
-            else:
-                self._speak_say(text)
+        if self._gui_callback and full_response:
+            self._gui_callback(f"[PMC] {' '.join(full_response)}")
 
     # ── Kokoro single sentence ────────────────────────────────────────
     def _speak_kokoro(self, text: str) -> None:
@@ -543,13 +729,14 @@ class VoiceOutput:
             self._speak_say(text)
 
     # ── Platform fallback ─────────────────────────────────────────────
-    def _speak_say(self, text: str) -> None:
+    def _speak_say(self, text: str, lang: str = "en") -> None:
         import platform
         if platform.system() == "Darwin":
             try:
+                voice = _SAY_VOICES.get(lang, _SAY_VOICES["en"])
                 if self._on_speak_start:
                     self._on_speak_start()
-                subprocess.run(["say", "-v", "Daniel", text], check=True, timeout=_SAY_TIMEOUT_S)
+                subprocess.run(["say", "-v", voice, text], check=True, timeout=_SAY_TIMEOUT_S)
                 if self._on_speak_end:
                     self._on_speak_end()
             except FileNotFoundError:

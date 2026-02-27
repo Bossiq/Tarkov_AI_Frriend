@@ -1,7 +1,8 @@
 """
 PMC Overwatch GUI — Sprite-based holographic avatar with alive animation.
 
-v0.24.0:
+v0.25.0:
+  • Premium neural voices (Ava Multilingual)
   • Restores the holographic girl sprites the user liked
   • Keeps alive animation engine (SmoothedNoise, micro-expressions, nods)
   • Holographic post-processing on sprites (scanlines, aberration, flicker)
@@ -294,7 +295,7 @@ class OverwatchGUI(ctk.CTk):
 
         self.shutdown_event = threading.Event()
         self._threads: list[threading.Thread] = []
-        self._toggle_cb = None; self._mic_cb = None
+        self._toggle_cb = None; self._mic_cb = None; self._chat_process_cb = None
         self._is_running = False; self._obs_mode = False
         self._session_start = datetime.now()
         self._words_spoken = 0; self._responses = 0
@@ -335,7 +336,7 @@ class OverwatchGUI(ctk.CTk):
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.bind("<Control-o>", lambda e: self._toggle_obs())
         self.bind("<Control-p>", lambda e: self._open_persona_editor())
-        logger.info("Sprite holographic GUI initialized (v0.24.0)")
+        logger.info("Sprite holographic GUI initialized (v0.25.0)")
 
     def _build_header(self):
         hdr = ctk.CTkFrame(self, corner_radius=20, fg_color=_CARD,
@@ -348,7 +349,7 @@ class OverwatchGUI(ctk.CTk):
         ctk.CTkLabel(lo, text="PMC Overwatch",
                      font=ctk.CTkFont(family=ft, size=24, weight="bold"),
                      text_color=_TEXT).pack(anchor="w")
-        ctk.CTkLabel(lo, text="Holographic AI Companion",
+        ctk.CTkLabel(lo, text="AI Voice Companion",
                      font=ctk.CTkFont(family=ft, size=11),
                      text_color=_HOLO).pack(anchor="w")
         self._btn = ctk.CTkButton(
@@ -549,7 +550,7 @@ class OverwatchGUI(ctk.CTk):
         self._chat_e.pack(side="left", fill="x", expand=True, padx=(0, 10))
         self._chat_e.bind("<Return>", self._on_chat)
         ctk.CTkButton(ci, text="Send", width=70, height=38, corner_radius=12,
-            font=ctk.CTkFont(size=12, weight="bold"), fg_color=_ACCENT, hover_color="#1a7f37",
+            font=ctk.CTkFont(size=12, weight="bold"), fg_color=_ACCENT, hover_color="#388bfd",
             text_color="white", command=self._on_chat).pack(side="right")
 
     def _build_footer(self):
@@ -562,7 +563,7 @@ class OverwatchGUI(ctk.CTk):
         self._st_lbl = ctk.CTkLabel(inn, text="Offline", font=ctk.CTkFont(size=12), text_color=_TEXT2)
         self._st_lbl.pack(side="left")
         ctk.CTkLabel(inn, text="Ctrl+O  Ctrl+P", font=ctk.CTkFont(size=9), text_color=_MUTED).pack(side="right", padx=(0, 10))
-        ctk.CTkLabel(inn, text="v0.24.0", font=ctk.CTkFont(size=10), text_color=_MUTED).pack(side="right", padx=(0, 10))
+        ctk.CTkLabel(inn, text="v0.25.0", font=ctk.CTkFont(size=10), text_color=_MUTED).pack(side="right", padx=(0, 10))
 
     # ══ OBS / PERSONA ════════════════════════════════════════════════
     def _toggle_obs(self):
@@ -640,6 +641,7 @@ class OverwatchGUI(ctk.CTk):
     # ══ PUBLIC API ════════════════════════════════════════════════════
     def set_toggle_callback(self, cb): self._toggle_cb = cb
     def set_mic_callback(self, cb): self._mic_cb = cb
+    def set_chat_callback(self, cb): self._chat_process_cb = cb
     def register_thread(self, t): self._threads.append(t)
     def log(self, msg):
         ts = datetime.now().strftime("%H:%M:%S"); line = f"[{ts}]  {msg}"
@@ -687,9 +689,9 @@ class OverwatchGUI(ctk.CTk):
         self._btn.configure(text="▶  Start", fg_color=_GREEN, hover_color=_GREEN_H); self._set_mode("idle")
     def _on_chat(self, event=None):
         text = self._chat_e.get().strip()
-        if text and self._toggle_cb:
+        if text and self._chat_process_cb:
             self._chat_e.delete(0, "end"); self.log(f"[You] {text}")
-            threading.Thread(target=self._toggle_cb, args=(True,), daemon=True).start()
+            threading.Thread(target=self._chat_process_cb, args=(text,), daemon=True).start()
     def _save_hist(self):
         if self._chat_log:
             try:

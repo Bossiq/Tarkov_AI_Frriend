@@ -82,6 +82,9 @@ class PMCOverwatch:
         self._gui.set_mic_callback(
             lambda idx: self._vi.set_device(idx, gui_log=self._gui.log)
         )
+        self._gui.set_chat_callback(
+            lambda text: self._process_interaction(text_prompt=text)
+        )
 
         # Initialize brain in background so GUI appears instantly
         threading.Thread(
@@ -300,7 +303,7 @@ class PMCOverwatch:
                 self._gui.set_vis_mode("thinking")
                 self._gui.log("[STT] Speech captured, transcribing...")
                 self._gui.set_status("Transcribing...")
-                transcription = self._vi.transcribe(audio_path)
+                result = self._vi.transcribe(audio_path)
 
                 # Clean up recorded audio
                 if os.path.exists(audio_path):
@@ -309,11 +312,15 @@ class PMCOverwatch:
                     except OSError:
                         logger.warning("Could not remove temp audio: %s", audio_path)
 
-                if not transcription:
+                if not result:
                     self._gui.log("[!] Could not understand audio, try again.")
                     return
 
-                self._gui.log(f"[You] {transcription}")
+                transcription, detected_lang = result
+                # Propagate detected language to TTS for smarter voice selection
+                self._vo.set_language_hint(detected_lang)
+                lang_label = {"en": "EN", "ro": "RO", "ru": "RU"}.get(detected_lang, detected_lang.upper())
+                self._gui.log(f"[You] ({lang_label}) {transcription}")
                 text_prompt = transcription
 
             except Exception:
@@ -397,6 +404,9 @@ class PMCOverwatch:
             self._barge_in_occurred = True  # next listen() skips onset detection
         else:
             logger.info("Response cycle completed in %.1fs", elapsed)
+            # Post-response cooldown: let environment settle before re-listening
+            # Prevents TTS echo / chair movement from triggering a new cycle
+            time.sleep(0.5)
 
         # Reset expression after speaking
         self._gui.reset_expression()

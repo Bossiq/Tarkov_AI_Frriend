@@ -27,19 +27,51 @@ logger = logging.getLogger(__name__)
 _SAMPLERATE = 16_000
 _CHANNELS = 1
 _CHUNK_SECONDS = 0.1
-_END_OF_SPEECH_SILENCE = 0.7     # End-of-speech silence (natural pause is ~300-600ms)
+_END_OF_SPEECH_SILENCE = 1.2     # End-of-speech silence (give user time to breathe/pause)
 _MAX_RECORDING_SECONDS = 30      # Allow longer utterances
 _CALIBRATION_SECONDS = 1.0
-_NOISE_MULTIPLIER = 2.0          # More sensitive onset detection
-_MIN_SPEECH_CHUNKS = 3           # Prevent false starts from clicks/coughs
-_PRE_BUFFER_CHUNKS = 5           # Less pre-speech capture (faster response)
+_NOISE_MULTIPLIER = 2.5          # Onset detection sensitivity
+_MIN_SPEECH_CHUNKS = 3           # Prevent false starts from clicks/squeaks/coughs
+_PRE_BUFFER_CHUNKS = 10          # 1s of pre-speech audio (captures first syllable)
 _SILENCE_FACTOR = 0.15           # End-of-speech = 15% of peak RMS
 _QUEUE_TIMEOUT = 0.2             # Never block longer than 200ms
 _RMS_WINDOW = 3                  # Sliding-window frames for RMS smoothing
-_MIN_SPEECH_SECONDS = 0.5        # Ignore speech shorter than this
+_MIN_SPEECH_SECONDS = 0.8        # Ignore speech shorter than this
 _TRIM_TRAILING_SILENCE = True    # Trim dead air from end of recording
 _DEFAULT_WHISPER_MODEL = "small"
 _DEFAULT_COMPUTE_TYPE = "int8"
+_SPECTRAL_FLATNESS_THRESHOLD = 0.85  # Reject chunks with flat spectrum (noise/squeaks)
+_POST_TTS_COOLDOWN = 0.5        # Seconds to ignore audio after TTS stops
+
+# Common Whisper hallucinations to reject
+_WHISPER_HALLUCINATIONS = {
+    ".", "..", "...", "…",
+    "thank you.", "thanks.", "thank you", "thanks",
+    "thank you for watching.", "thanks for watching.",
+    "subtitles by", "subtitled by",
+    "subscribe", "like and subscribe",
+    "you", "bye.", "bye", "the end.", "the end",
+    "so", "i", "hmm", "huh", "uh", "um",
+    "mulțumesc.", "mulțumesc", "la revedere.",
+    "спасибо.", "спасибо", "до свидания.",
+}
+
+
+def _spectral_flatness(chunk: np.ndarray) -> float:
+    """Compute spectral flatness (0=tonal/speech, 1=flat/noise).
+
+    Chair squeaks, clicks, and other non-speech transients have a
+    flat spectral profile.  Human speech has formant peaks, giving
+    low flatness.  Threshold of ~0.85 separates them.
+    """
+    spectrum = np.abs(np.fft.rfft(chunk.flatten()))
+    # Avoid log(0)
+    spectrum = np.maximum(spectrum, 1e-10)
+    geo_mean = np.exp(np.mean(np.log(spectrum)))
+    arith_mean = np.mean(spectrum)
+    if arith_mean < 1e-10:
+        return 1.0
+    return float(geo_mean / arith_mean)
 
 
 class VoiceInput:
@@ -82,11 +114,16 @@ class VoiceInput:
         return result
 
     def set_device(self, device_index: Optional[int], gui_log=None) -> None:
-        """Switch to a different input device and recalibrate."""
+        """Switch to a different input device and recalibrate.
+
+        Keeps the old threshold while recalibrating so the listen loop
+        never sees ``None`` in a concurrent comparison.
+        """
         self.device = device_index
         name = "Default" if device_index is None else sd.query_devices(device_index)["name"]
         logger.info("Mic device changed → %s (index=%s)", name, device_index)
-        self._threshold = None  # force recalibration on next listen
+        # Keep old threshold during recalibration — prevents NoneType crash
+        # in concurrent listen() loop.  calibrate() will overwrite it.
         self.calibrate(gui_log=gui_log)
 
     def _get_whisper_model(self):
@@ -206,7 +243,7 @@ class VoiceInput:
         # Absolute-silence threshold: anything below this is "dead air"
         # (set to 20% of the onset threshold — for a 0.015 threshold this = 0.003)
         abs_silence_threshold = self._threshold * 0.2
-        abs_silence_timeout = 0.4  # 400ms of dead air = guaranteed end
+        abs_silence_timeout = 0.7  # 700ms of dead air = guaranteed end
 
         # After barge-in, don't trigger end-of-speech until we hear actual
         # speech in this new session.  This prevents the silence detectors
@@ -267,7 +304,19 @@ class VoiceInput:
                     smoothed_rms = float(np.mean(rms_window))
 
                     # ── ONSET: use RAW RMS (no averaging delay) ───────
-                    if raw_rms > self._threshold:
+                    if raw_rms > (self._threshold or 0.015):
+                        # Spectral flatness check ONLY during onset detection
+                        # (not while already recording — fricatives like 's','sh'
+                        #  have flat spectra and would break mid-speech)
+                        if not is_recording:
+                            flatness = _spectral_flatness(chunk)
+                            if flatness > _SPECTRAL_FLATNESS_THRESHOLD:
+                                # Noise spike, not speech — don't count it,
+                                # but don't reset the counter either (speech
+                                # can have brief noisy frames between words)
+                                pre_buffer.append(chunk.copy())
+                                continue
+
                         consecutive_loud += 1
                         silence_start = None
                         abs_silence_start = None
@@ -276,8 +325,8 @@ class VoiceInput:
                             pre_buffer.append(chunk.copy())
                             if consecutive_loud >= _MIN_SPEECH_CHUNKS:
                                 logger.info(
-                                    "Speech detected (rms=%.4f) — recording …",
-                                    raw_rms,
+                                    "Speech detected (rms=%.4f, flatness=%.2f) — recording …",
+                                    raw_rms, flatness,
                                 )
                                 is_recording = True
                                 recording_start = time.monotonic()
@@ -407,6 +456,12 @@ class VoiceInput:
     def monitor_for_speech(self, stop_event: threading.Event) -> bool:
         """Watch the mic for speech onset during TTS playback.
 
+        Uses a HIGHER threshold than normal listening (4x) to avoid
+        false triggers from TTS audio bleeding through the microphone
+        (acoustic echo).  Also requires more consecutive chunks (5) and
+        applies a spectral flatness check to distinguish real speech from
+        speaker playback.
+
         When speech is detected, continues capturing audio into
         ``_bargein_frames`` until *stop_event* is set.  The next call
         to ``listen(assume_speaking=True)`` will prepend those frames
@@ -417,6 +472,13 @@ class VoiceInput:
         if self._threshold is None:
             self.calibrate()
 
+        # Barge-in needs a MUCH higher bar than normal listening:
+        # TTS playing through speakers typically creates mic RMS of
+        # 0.02–0.06 — well above the 0.015 noise threshold.
+        # 4x ensures only real, close-range speech triggers it.
+        bargein_threshold = max((self._threshold or 0.015) * 4.0, 0.05)
+        bargein_required = 5  # 500ms of confirmed speech
+
         monitor_q: queue.Queue = queue.Queue()
         pre_chunks: list[np.ndarray] = []  # chunks that triggered onset
 
@@ -424,7 +486,6 @@ class VoiceInput:
             monitor_q.put(indata.copy())
 
         consecutive_loud = 0
-        required = _MIN_SPEECH_CHUNKS
         detected = False
 
         try:
@@ -445,13 +506,21 @@ class VoiceInput:
                     if not detected:
                         # ── Phase 1: detect speech onset ──────────
                         raw_rms = float(np.sqrt(np.mean(chunk ** 2)))
-                        if raw_rms > self._threshold:
+                        if raw_rms > bargein_threshold:
+                            # Spectral flatness check: speaker echo has
+                            # flat spectrum, real speech has formant peaks
+                            flatness = _spectral_flatness(chunk)
+                            if flatness > _SPECTRAL_FLATNESS_THRESHOLD:
+                                consecutive_loud = 0
+                                pre_chunks.clear()
+                                continue
+
                             consecutive_loud += 1
                             pre_chunks.append(chunk)
-                            if consecutive_loud >= required:
+                            if consecutive_loud >= bargein_required:
                                 logger.info(
-                                    "Barge-in speech detected (rms=%.4f, thr=%.4f)",
-                                    raw_rms, self._threshold,
+                                    "Barge-in speech detected (rms=%.4f, thr=%.4f, flat=%.2f)",
+                                    raw_rms, bargein_threshold, flatness,
                                 )
                                 detected = True
                                 self._bargein_frames = list(pre_chunks)
@@ -473,14 +542,122 @@ class VoiceInput:
         return detected
 
     # ── Transcription ─────────────────────────────────────────────────
-    def transcribe(self, audio_path: str) -> Optional[str]:
+    def transcribe(self, audio_path: str) -> Optional[tuple[str, str]]:
+        """Transcribe audio file. Returns (text, detected_language) or None."""
         start = time.monotonic()
         try:
-            model = self._get_whisper_model()
-            # Auto-detect language for multilingual support (EN/RU/RO).
-            # Set WHISPER_LANGUAGE=en in .env to force English only.
+            # ── Short audio guard ─────────────────────────────────────
+            import soundfile as _sf
+            audio_info = _sf.info(audio_path)
+            if audio_info.duration < 0.6:
+                logger.info("Audio too short (%.2fs) — skipping transcription", audio_info.duration)
+                return None
+
+            # ── Try Groq cloud first (fast + accurate) ────────────────
+            groq_key = os.getenv("GROQ_API_KEY", "").strip()
+            if groq_key:
+                result = self._transcribe_groq(audio_path, groq_key, start)
+                if result is not None:
+                    result = self._filter_hallucination(result)
+                    if result is not None:
+                        return result
+                logger.warning("Groq transcription failed or hallucination — falling back to local Whisper")
+
+            # ── Fallback: local Whisper ────────────────────────────────
+            result = self._transcribe_local(audio_path, start)
+            if result is not None:
+                result = self._filter_hallucination(result)
+            return result
+
+        except Exception:
+            logger.exception("Transcription failed")
+            return None
+
+    @staticmethod
+    def _filter_hallucination(result: tuple[str, str]) -> Optional[tuple[str, str]]:
+        """Reject common Whisper hallucinations (e.g. '...', 'Thank you.')."""
+        text, lang = result
+        cleaned = text.strip().lower()
+        if cleaned in _WHISPER_HALLUCINATIONS:
+            logger.info("Rejected Whisper hallucination: '%s'", text)
+            return None
+        # Reject text that is ONLY punctuation or whitespace
+        if not any(c.isalnum() for c in cleaned):
+            logger.info("Rejected punctuation-only transcription: '%s'", text)
+            return None
+        # Reject very short transcriptions (< 2 real words)
+        words = [w for w in cleaned.split() if len(w) > 1]
+        if len(words) < 1:
+            logger.info("Rejected too-short transcription: '%s'", text)
+            return None
+        return (text, lang)
+
+    def _transcribe_groq(self, audio_path: str, api_key: str,
+                         start: float) -> Optional[tuple[str, str]]:
+        """Transcribe via Groq cloud API (whisper-large-v3-turbo)."""
+        try:
+            import groq
+            client = groq.Groq(api_key=api_key)
+
             whisper_lang = os.getenv("WHISPER_LANGUAGE", "auto")
             lang_arg = None if whisper_lang == "auto" else whisper_lang
+
+            with open(audio_path, "rb") as f:
+                # Build a Whisper prompt based on language setting.
+                # Romanian prompt helps accuracy when lang=ro but would
+                # bias English/auto detection towards Romanian.
+                whisper_prompt = "Escape from Tarkov, PMC, raid, loot, quest."
+                if lang_arg == "ro":
+                    whisper_prompt += (
+                        " Salut frate, ce faci, hai să mergem,"
+                        " ești gata de raid."
+                    )
+                elif lang_arg == "ru":
+                    whisper_prompt += " Привет, братан, го в рейд."
+
+                kwargs = {
+                    "model": "whisper-large-v3-turbo",
+                    "file": ("audio.wav", f, "audio/wav"),
+                    "response_format": "verbose_json",
+                    "prompt": whisper_prompt,
+                }
+                if lang_arg:
+                    kwargs["language"] = lang_arg
+
+                transcription = client.audio.transcriptions.create(**kwargs)
+
+            text = transcription.text.strip() if transcription.text else ""
+            raw_lang = getattr(transcription, 'language', lang_arg or 'en')
+            # Normalize Groq's full language names to ISO codes
+            # (Groq returns 'English', 'Romanian', etc. but our system uses 'en', 'ro')
+            _LANG_NORM = {
+                'english': 'en', 'romanian': 'ro', 'russian': 'ru',
+                'en': 'en', 'ro': 'ro', 'ru': 'ru',
+            }
+            detected = _LANG_NORM.get(raw_lang.lower().strip(), raw_lang[:2].lower())
+            elapsed = time.monotonic() - start
+
+            logger.info(
+                "Groq transcribed in %.1fs [lang=%s]: '%s'",
+                elapsed, detected, text[:80]
+            )
+
+            return (text, detected) if text else None
+
+        except Exception:
+            logger.exception("Groq STT error")
+            return None
+
+    def _transcribe_local(self, audio_path: str,
+                          start: float) -> Optional[tuple[str, str]]:
+        """Transcribe via local faster-whisper model."""
+        try:
+            model = self._get_whisper_model()
+            whisper_lang = os.getenv("WHISPER_LANGUAGE", "auto")
+            lang_arg = None if whisper_lang == "auto" else whisper_lang
+            lang_forced = lang_arg is not None
+            if lang_forced:
+                logger.debug("Language forced to: %s", lang_arg)
 
             # Prime Whisper with Tarkov-specific vocabulary so it
             # recognises game terms instead of guessing common words
@@ -564,22 +741,191 @@ class VoiceInput:
                 "OBS, overlay, alerts, scene, "
                 "stream sniper, stream sniping, TOS, "
                 "affiliate, partner, "
-                "drops, Twitch drops, watch party"
+                "drops, Twitch drops, watch party, "
+
+                # ── Romanian: common phrases & greetings ──
+                "Salut, bună ziua, ce faci, bine, mulțumesc, "
+                "hai să mergem, hai să jucăm, du-te, vino, "
+                "frate, fratele meu, boss, șefu, nea, "
+                "sunt gata, ești gata, pregătit, "
+                "trebuie să, vreau să, pot să, "
+                "stai, așteaptă, repede, grăbește-te, "
+                "pune, ia, dă-mi, uite, vezi, ascultă, "
+                "română, românește, vorbește, spune, "
+
+                # ── Romanian: verb conjugations (Whisper primer) ──
+                "înțeleg, înțelegi, înțelege, înțelegem, înțelegeți, înțeles, "
+                "știu, știi, știe, știm, știți, "
+                "vreau, vrei, vrea, vrem, vreți, "
+                "pot, poți, poate, putem, puteți, "
+                "fac, faci, face, facem, faceți, făcut, "
+                "spun, spui, spune, spunem, spuneți, spus, "
+                "cred, crezi, crede, credem, credeți, "
+                "văd, vezi, vede, vedem, vedeți, văzut, "
+                "aud, auzi, aude, auzim, auziți, auzit, "
+                "sunt, ești, este, suntem, sunteți, "
+                "merg, mergi, merge, mergem, mergeți, mers, "
+                "vin, vii, vine, venim, veniți, venit, "
+                "dau, dai, dă, dăm, dați, dat, "
+                "iau, iei, ia, luăm, luați, luat, "
+                "zic, zici, zice, zicem, ziceți, zis, "
+                "stau, stai, stă, stăm, stați, stat, "
+                "gândesc, gândești, gândește, gândim, gândiți, "
+                "vorbesc, vorbești, vorbește, vorbim, vorbiți, "
+                "ascult, asculți, ascultă, ascultăm, ascultați, "
+                "ajut, ajuți, ajută, ajutăm, ajutați, "
+                "întreb, întrebi, întreabă, întrebăm, întrebați, "
+                "răspund, răspunzi, răspunde, răspundem, răspundeți, "
+                "învăț, înveți, învață, învățăm, învățați, "
+                "citesc, citești, citește, citim, citiți, "
+                "scriu, scrii, scrie, scriem, scrieți, "
+                "caut, cauți, caută, căutăm, căutați, "
+                "găsesc, găsești, găsește, găsim, găsiți, găsit, "
+                "urc, urci, urcă, urcăm, urcați, "
+                "cobor, cobori, coboară, coborâm, coborâți, "
+                "alearg, alergi, aleargă, alergăm, alergați, "
+                "trag, tragi, trage, tragem, trageți, "
+                "arunc, arunci, aruncă, aruncăm, aruncați, "
+
+                # ── Romanian: conversational Q&A ──
+                "ce spui, ce zici, ce faci, ce vrei, "
+                "cum merge, cum e, cum stai, cum a fost, "
+                "unde ești, unde mergi, unde e, "
+                "când plecăm, când începem, când vii, "
+                "de ce, pentru ce, la ce, "
+                "da sigur, nu știu, poate, normal, desigur, "
+                "bine bine, ok bine, aha, mda, exact, corect, "
+                "ce părere ai, ce crezi, serios, chiar, "
+
+                # ── Romanian: Tarkov gameplay ──
+                "raid, raiduri, am intrat în raid, ies din raid, "
+                "quest, questuri, questul, taskuri, misiune, misiuni, "
+                "arma, armă, glonț, gloanțe, armură, rucsac, "
+                "extracție, extrage, ieși, punct de extracție, "
+                "headshot, head-eyes, one-tap, am dat headshot, "
+                "am murit, m-a omorât, l-am omorât, a murit, "
+                "pericol, atenție, dușman, inamicul, scav, scavul, "
+                "loot, lootez, am lootat, ce loot ai, "
+                "stash, ascunzătoare, piața, flea market, "
+                "hideout, baza, Bitcoin Farm, "
+                "wipe, s-a dat wipe, după wipe, "
+
+                # ── Romanian: Tarkov maps & bosses (as spoken) ──
+                "Customs, pe Customs, mergem pe Customs, "
+                "Factory, pe Factory, Labs, pe Labs, "
+                "Interchange, Shoreline, Reserve, Woods, "
+                "Streets, pe Streets, Lighthouse, Ground Zero, "
+                "Reshala, Killa, Shturman, Tagilla, Glukhar, Kaban, "
+                "Prapor, Therapist, Skier, Peacekeeper, Mechanic, Ragman, Jaeger, "
+
+                # ── Romanian: Tarkov community slang ──
+                "chad, rat, extract camper, kitted, juiced, thicc, "
+                "meta, build meta, ce build ai, echipament, "
+                "bine jucat, bravo, super, genial, nebun, "
+                "ce tare, ce nasol, ce rău, ce bine, "
+                "skill issue, am dat-o în bară, norocul meu, "
+                "am făcut-o, l-am luat, am scăpat, "
+                "ce cheater, hacker, suspect, "
+
+                # ── Romanian: Twitch & streaming ──
+                "stream, streamul, pe stream, sunt live, "
+                "chat, în chat, scrieți în chat, "
+                "sub, subscribe, follow, follower, "
+                "donație, donații, raid de stream, "
+                "clip, clipul, emote, emoturi, "
+                "moderator, ban, timeout, "
+
+                # ── Russian: common phrases & greetings ──
+                "Привет, здарова, здрасте, как дела, хорошо, спасибо, "
+                "давай пойдём, айда, погнали, пошли, "
+                "братан, брат, чел, красавчик, дружище, "
+                "я готов, ты готов, повнимательнее, "
+                "надо, хочу, могу, давай, жди, "
+                "стой, подожди, быстрее, беги, "
+                "по-русски, говори, скажи, "
+
+                # ── Russian: verb conjugations (Whisper primer) ──
+                "понимаю, понимаешь, понимает, понимаем, понимаете, понял, "
+                "знаю, знаешь, знает, знаем, знаете, "
+                "хочу, хочешь, хочет, хотим, хотите, "
+                "могу, можешь, может, можем, можете, "
+                "делаю, делаешь, делает, делаем, делаете, сделал, "
+                "говорю, говоришь, говорит, говорим, говорите, сказал, "
+                "думаю, думаешь, думает, думаем, думаете, "
+                "вижу, видишь, видит, видим, видите, видел, "
+                "слышу, слышишь, слышит, слышим, слышите, слышал, "
+                "иду, идёшь, идёт, идём, идёте, шёл, пошёл, "
+                "бегу, бежишь, бежит, бежим, бежите, бежал, "
+                "стреляю, стреляешь, стреляет, стрельнул, "
+                "ищу, ищешь, ищет, ищем, ищете, нашёл, "
+                "жду, ждёшь, ждёт, ждём, ждёте, "
+
+                # ── Russian: conversational Q&A ──
+                "что скажешь, что думаешь, как думаешь, "
+                "куда идём, куда пойдём, где ты, где он, "
+                "когда начнём, когда пойдём, сколько, "
+                "почему, зачем, откуда, "
+                "да конечно, не знаю, может быть, наверное, "
+                "ладно, хорошо, окей, ага, точно, именно, "
+
+                # ── Russian: Tarkov gameplay ──
+                "го в рейд, рейд, рейды, зашли в рейд, "
+                "квест, квесты, задание, задания, миссия, "
+                "оружие, пушка, ствол, патроны, броня, рюкзак, "
+                "экстракт, выход, точка выхода, вышел, "
+                "хедшот, ваншот, убил, убили, умер, "
+                "опасно, осторожно, враг, противник, противники, "
+                "скав, скавы, пэмэсэ, юсек, бэар, "
+                "лут, лутаю, залутал, что нашёл, "
+                "тайник, рынок, барахолка, "
+                "убежище, биткоин ферма, "
+                "вайп, после вайпа, новый вайп, "
+
+                # ── Russian: Tarkov maps & bosses ──
+                "Таможня, Завод, Развязка, Берег, Резерв, "
+                "Лаборатория, Лабы, Улицы, Маяк, Эпицентр, "
+                "Решала, Килла, Штурман, Тагилла, Глухарь, Кабан, "
+                "Прапор, Терапевт, Лыжник, Миротворец, Механик, Барахольщик, Егерь, "
+
+                # ── Russian: Tarkov community slang ──
+                "чад, крыса, кемпер, задрот, "
+                "мета, билд мета, шмот, экип, "
+                "красава, молодец, круто, жёстко, мощно, "
+                "скилл ишью, лаки, читер, хакер, подозрительно, "
+                "заберём, забрали, вынесли, затащили, "
+
+                # ── Russian: Twitch & streaming ──
+                "стрим, на стриме, в эфире, лайв, "
+                "чат, в чате, пишите в чат, "
+                "саб, подписка, фоллов, фолловер, "
+                "донат, донаты, рейд на стрим, "
+                "клип, эмоут, эмоуты, "
+                "модератор, бан, таймаут"
             )
 
             segments, info = model.transcribe(
-                audio_path, language=lang_arg, beam_size=5,
+                audio_path, language=lang_arg, beam_size=1,
                 vad_filter=True,
                 vad_parameters=dict(min_silence_duration_ms=400, speech_pad_ms=250),
                 initial_prompt=initial_prompt,
             )
             text = " ".join(s.text.strip() for s in segments).strip()
             detected = getattr(info, 'language', 'unknown')
+            probability = getattr(info, 'language_probability', 0.0)
             logger.info(
-                "Transcribed in %.1fs [lang=%s]: '%s'",
-                time.monotonic() - start, detected, text[:80]
+                "Transcribed in %.1fs [lang=%s, conf=%.0f%%]: '%s'",
+                time.monotonic() - start, detected, probability * 100, text[:80]
             )
-            return text if text else None
+
+            # ── Confidence filtering ──────────────────────────────────
+            if probability < 0.5:
+                logger.warning(
+                    "Low confidence (%.0f%%) — rejecting transcription: '%s'",
+                    probability * 100, text[:60]
+                )
+                return None
+
+            return (text, detected) if text else None
         except Exception:
             logger.exception("Transcription failed")
             return None

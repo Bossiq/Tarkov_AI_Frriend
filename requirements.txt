@@ -1,5 +1,5 @@
-# ── PMC Overwatch — Pinned Dependencies ────────────────────────────
-# Windows PC with Python 3.14 — relaxed pins for compatibility.
+# ── PMC Overwatch — Dependencies ───────────────────────────────────
+# Requires Python 3.10+ — relaxed pins for cross-platform compatibility.
 # Only direct dependencies are listed; transitive deps are managed by pip.
 
 groq

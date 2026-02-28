@@ -273,6 +273,128 @@ class VoiceInput:
             logger.exception("Transcription failed")
             return None
 
+    # ══════════════════════════════════════════════════════════════════
+    #  BARGE-IN MONITOR — parallel mic monitoring during TTS
+    # ══════════════════════════════════════════════════════════════════
+    # Runs on a background thread while the AI speaks. When the user
+    # starts talking (sustained speech above threshold), it fires an
+    # interrupt_event and captures the audio for immediate transcription.
+    #
+    # Filtering:
+    #   • Energy > 3x ambient threshold (rejects quiet sounds)
+    #   • Duration > 0.6s sustained (rejects clicks, laughs, coughs)
+    #   • Records post-trigger audio for ~2s so STT gets a full phrase
+
+    _BARGEIN_SUSTAINED_CHUNKS = 6   # 6 * 100ms = 0.6s sustained speech
+    _BARGEIN_ENERGY_MULT = 3.0      # 3x ambient = clearly speaking
+    _BARGEIN_POST_RECORD_S = 2.0    # record 2s after trigger for STT
+
+    def start_bargein_monitor(
+        self,
+        interrupt_event: threading.Event,
+        threshold: Optional[float] = None,
+    ) -> None:
+        """Start background mic monitor that fires interrupt_event on speech.
+
+        Args:
+            interrupt_event: Set this when sustained speech detected.
+            threshold: Energy threshold (defaults to calibrated value * 3).
+        """
+        if self._threshold is None:
+            self.calibrate()
+
+        self._bargein_stop = threading.Event()
+        self._bargein_audio: list[np.ndarray] = []
+        self._bargein_triggered = False
+        self._bargein_interrupt = interrupt_event
+
+        bargein_threshold = (threshold or self._threshold) * self._BARGEIN_ENERGY_MULT
+
+        def _monitor():
+            consecutive_loud = 0
+            triggered = False
+            post_record_start = None
+            q: queue.Queue = queue.Queue()
+
+            def _cb(indata, frames, time_info, status):
+                q.put(indata.copy())
+
+            try:
+                with sd.InputStream(
+                    samplerate=self.samplerate,
+                    channels=self.channels,
+                    dtype="float32",
+                    blocksize=self._chunk_size,
+                    callback=_cb,
+                ):
+                    while not self._bargein_stop.is_set():
+                        try:
+                            chunk = q.get(timeout=0.15)
+                        except queue.Empty:
+                            continue
+
+                        rms = float(np.sqrt(np.mean(chunk ** 2)))
+
+                        if triggered:
+                            # Post-trigger: keep recording for STT
+                            self._bargein_audio.append(chunk)
+                            if (post_record_start and
+                                    time.monotonic() - post_record_start > self._BARGEIN_POST_RECORD_S):
+                                logger.debug("Barge-in: post-record complete")
+                                break
+                            # End early if silence returns
+                            if rms < bargein_threshold * 0.5:
+                                if post_record_start is None:
+                                    post_record_start = time.monotonic()
+                            else:
+                                post_record_start = None
+                        else:
+                            if rms > bargein_threshold:
+                                consecutive_loud += 1
+                                self._bargein_audio.append(chunk)
+                                if consecutive_loud >= self._BARGEIN_SUSTAINED_CHUNKS:
+                                    logger.info(
+                                        "Barge-in TRIGGERED (rms=%.4f, threshold=%.4f, "
+                                        "chunks=%d)",
+                                        rms, bargein_threshold, consecutive_loud,
+                                    )
+                                    triggered = True
+                                    self._bargein_triggered = True
+                                    interrupt_event.set()
+                                    post_record_start = None
+                            else:
+                                consecutive_loud = 0
+                                self._bargein_audio.clear()
+
+            except Exception:
+                logger.debug("Barge-in monitor mic error (expected during TTS)")
+
+        self._bargein_thread = threading.Thread(
+            target=_monitor, name="BargeInMonitor", daemon=True
+        )
+        self._bargein_thread.start()
+        logger.debug("Barge-in monitor started (threshold=%.4f)", bargein_threshold)
+
+    def stop_bargein_monitor(self) -> Optional[str]:
+        """Stop the barge-in monitor. Returns audio path if speech was captured."""
+        if not hasattr(self, '_bargein_stop'):
+            return None
+
+        self._bargein_stop.set()
+        if hasattr(self, '_bargein_thread'):
+            self._bargein_thread.join(timeout=2.0)
+
+        if not self._bargein_triggered or not self._bargein_audio:
+            return None
+
+        # Save captured audio for transcription
+        audio = np.concatenate(self._bargein_audio, axis=0)
+        path = "bargein_capture.wav"
+        sf.write(path, audio, self.samplerate)
+        duration = len(audio) / self.samplerate
+        logger.info("Barge-in audio: %.1fs -> %s", duration, path)
+        return path
+
 
 if __name__ == "__main__":
     from logging_config import setup_logging

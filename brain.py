@@ -6,6 +6,7 @@ Fallback: Ollama local inference
 
 Features:
   • Auto-selects Groq if GROQ_API_KEY is set, else Ollama
+  • Auto-failover: Groq rate-limit → Ollama → auto switch-back
   • Streaming sentence-by-sentence for instant TTS
   • Sliding-window conversation memory
   • Retry logic with exponential backoff
@@ -14,6 +15,7 @@ Features:
 import logging
 import os
 import re
+import threading
 import time
 from collections import deque
 from typing import Generator, Optional
@@ -24,13 +26,13 @@ logger = logging.getLogger(__name__)
 _DEFAULT_OLLAMA_MODEL = "qwen2.5:3b"
 _DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
 _DEFAULT_NUM_CTX = 2048
-_DEFAULT_NUM_PREDICT = 150
+_DEFAULT_NUM_PREDICT = 512
 _DEFAULT_NUM_BATCH = 512
 _DEFAULT_TEMPERATURE = 0.6
 _DEFAULT_TOP_P = 0.85
 _DEFAULT_REPEAT_PENALTY = 1.1
 _MAX_MEMORY = 4
-_MAX_RETRIES = 3
+_MAX_RETRIES = 5
 _RETRY_BASE_DELAY = 1.0
 
 from tarkov_data import QUEST_REFERENCE  # noqa: E402
@@ -86,49 +88,153 @@ def detect_emotion(text: str) -> str:
     return "neutral"
 
 
+# ═════════════════════════════════════════════════════════════════════
+#  Rate-limit error detection
+# ═════════════════════════════════════════════════════════════════════
+def _is_rate_limit_error(exc: Exception) -> bool:
+    """Check if an exception is a rate-limit (429) error."""
+    # Check exception type first (groq SDK raises RateLimitError)
+    exc_type = type(exc).__name__
+    if "RateLimit" in exc_type:
+        return True
+    # Fallback: check error message
+    msg = str(exc).lower()
+    return "429" in msg or "rate_limit" in msg or "rate limit" in msg
+
+
+def _parse_cooldown_seconds(exc: Exception) -> float:
+    """Extract cooldown duration from a rate-limit error message."""
+    msg = str(exc)
+    # Groq format: "Please try again in 17m46.175999999s"
+    m = re.search(r'(\d+)m(\d+(?:\.\d+)?)s', msg)
+    if m:
+        return float(m.group(1)) * 60 + float(m.group(2))
+    # Just minutes
+    m = re.search(r'(\d+)m', msg)
+    if m:
+        return float(m.group(1)) * 60
+    # Just seconds
+    m = re.search(r'(\d+(?:\.\d+)?)s', msg)
+    if m:
+        return float(m.group(1))
+    return 300.0  # default 5 minutes
+
+
 class Brain:
-    """Dual-engine LLM: Groq cloud (primary) + Ollama local (fallback)."""
+    """Dual-engine LLM: Groq cloud (primary) + Ollama local (fallback).
+
+    Auto-failover: when Groq hits a rate limit, instantly switches to
+    Ollama local, then switches back after the cooldown expires.
+    If Ollama is unavailable, waits out the Groq cooldown with backoff.
+    """
 
     def __init__(self) -> None:
         self._temperature = _DEFAULT_TEMPERATURE
         self._top_p = _DEFAULT_TOP_P
         self._repeat_penalty = _DEFAULT_REPEAT_PENALTY
         self._num_ctx = int(os.getenv("OLLAMA_NUM_CTX", str(_DEFAULT_NUM_CTX)))
+        self._lock = threading.Lock()  # protect engine switching
 
         # Conversation memory — sliding window
         self._memory: deque[dict] = deque(maxlen=_MAX_MEMORY * 2)
 
-        # Determine engine
+        # ── Init both engines (best-effort) ──────────────────────────
         self._groq_key = os.getenv("GROQ_API_KEY", "").strip()
-        self._engine = "groq" if self._groq_key else "ollama"
+        self._groq_client = None
+        self._groq_model = os.getenv("GROQ_MODEL", _DEFAULT_GROQ_MODEL)
+        self._ollama_client = None
+        self._ollama_model = os.getenv("OLLAMA_MODEL", _DEFAULT_OLLAMA_MODEL)
+        self._ollama_available = False
+        self._groq_cooldown_until = 0.0
 
-        if self._engine == "groq":
-            self._init_groq()
-        else:
-            self._init_ollama()
+        # Groq
+        if self._groq_key:
+            try:
+                import groq
+                self._groq_client = groq.Groq(api_key=self._groq_key)
+                logger.info("Groq cloud ready (model=%s)", self._groq_model)
+            except Exception:
+                logger.exception("Groq init failed")
 
-    # ── Engine initialization ────────────────────────────────────────
-    def _init_groq(self) -> None:
-        """Initialize Groq cloud client."""
-        import groq
-        self._groq_client = groq.Groq(api_key=self._groq_key)
-        self._model = os.getenv("GROQ_MODEL", _DEFAULT_GROQ_MODEL)
-        logger.info("Brain using Groq cloud (model=%s)", self._model)
-
-    def _init_ollama(self) -> None:
-        """Initialize local Ollama client."""
-        import ollama
-        self._ollama_client = ollama.Client()
-        self._model = os.getenv("OLLAMA_MODEL", _DEFAULT_OLLAMA_MODEL)
+        # Ollama (best-effort — verify model is actually pulled)
         try:
-            self._ollama_client.list()
-            logger.info("Brain using Ollama local (model=%s, ctx=%d)", self._model, self._num_ctx)
-        except Exception as exc:
+            import ollama
+            self._ollama_client = ollama.Client()
+            models = self._ollama_client.list()
+            # Check if our exact model is available
+            model_names = []
+            if hasattr(models, 'models'):
+                model_names = [m.model for m in models.models]
+            elif isinstance(models, dict):
+                model_names = [m.get("model", "") for m in models.get("models", [])]
+            # Exact match required
+            target = self._ollama_model
+            model_found = target in model_names
+            if model_found:
+                self._ollama_available = True
+                logger.info("Ollama local ready (model=%s, ctx=%d)",
+                            self._ollama_model, self._num_ctx)
+            else:
+                logger.warning(
+                    "Ollama running but model '%s' not found. "
+                    "Available: %s. Run: ollama pull %s",
+                    self._ollama_model,
+                    ", ".join(model_names) or "none",
+                    self._ollama_model,
+                )
+        except Exception:
+            logger.info("Ollama not available (not running or not installed)")
+
+        # Pick primary engine
+        if self._groq_client:
+            self._engine = "groq"
+            self._model = self._groq_model
+        elif self._ollama_available:
+            self._engine = "ollama"
+            self._model = self._ollama_model
+        else:
             raise ConnectionError(
-                f"Cannot connect to Ollama. Is it running? "
-                f"Launch the Ollama app or run: ollama serve. "
-                f"Error: {exc}"
-            ) from exc
+                "No LLM engine available. Set GROQ_API_KEY or start Ollama."
+            )
+
+        logger.info("Brain active: %s (%s) | fallback: %s",
+                     self._engine, self._model,
+                     "ollama" if self._ollama_available and self._engine != "ollama"
+                     else "none")
+
+    # ── Engine switching ──────────────────────────────────────────────
+    def _failover_to_ollama(self, cooldown_seconds: float) -> bool:
+        """Switch to Ollama. Returns True if Ollama is available."""
+        if not self._ollama_available:
+            return False
+        with self._lock:
+            self._engine = "ollama"
+            self._model = self._ollama_model
+            self._groq_cooldown_until = time.monotonic() + cooldown_seconds
+        logger.info("Failover -> Ollama (Groq cooldown %.0fs)", cooldown_seconds)
+
+        # Schedule auto switch-back
+        def _restore():
+            with self._lock:
+                if self._groq_client and self._engine == "ollama":
+                    self._engine = "groq"
+                    self._model = self._groq_model
+                    logger.info("Auto-restored -> Groq (cooldown expired)")
+        timer = threading.Timer(cooldown_seconds, _restore)
+        timer.daemon = True
+        timer.start()
+        return True
+
+    def _maybe_restore_groq(self) -> None:
+        """Check if Groq cooldown expired and restore it as primary."""
+        if (self._engine == "ollama" and self._groq_client
+                and self._groq_cooldown_until > 0
+                and time.monotonic() >= self._groq_cooldown_until):
+            with self._lock:
+                self._engine = "groq"
+                self._model = self._groq_model
+                self._groq_cooldown_until = 0.0
+            logger.info("Restored -> Groq (cooldown expired)")
 
     # ── Message helpers ───────────────────────────────────────────────
     def _build_messages(self, user_prompt: str) -> list[dict]:
@@ -170,6 +276,9 @@ class Brain:
 
         while retry_count <= _MAX_RETRIES:
             try:
+                # Check if we can restore Groq
+                self._maybe_restore_groq()
+
                 logger.info("Streaming from %s (%s) …", self._engine, self._model)
                 messages = self._build_messages(text_prompt)
 
@@ -198,21 +307,37 @@ class Brain:
                 return
 
             except Exception as exc:
-                logger.exception("%s streaming failed", self._engine)
-                error_msg = str(exc).lower()
+                logger.warning("%s error: %s", self._engine, exc)
 
-                # Model not found — don't retry
-                if "not found" in error_msg or "model" in error_msg and "not" in error_msg:
-                    yield f"Model '{self._model}' not available. Check config."
-                    return
+                # ── Rate-limit → try instant failover ────────────────
+                if _is_rate_limit_error(exc) and self._engine == "groq":
+                    cooldown = _parse_cooldown_seconds(exc)
+                    logger.info("Groq rate-limited (cooldown %.0fs)", cooldown)
 
+                    if self._failover_to_ollama(cooldown):
+                        # Retry immediately with Ollama
+                        buffer = ""
+                        full_response = ""
+                        continue
+                    else:
+                        # No Ollama → wait out the Groq cooldown
+                        wait = min(cooldown, 60.0)  # cap single wait at 60s
+                        logger.info("No Ollama fallback — waiting %.0fs for Groq", wait)
+                        time.sleep(wait)
+                        buffer = ""
+                        full_response = ""
+                        continue
+
+                # ── Generic error → retry with backoff ───────────────
                 retry_count += 1
                 if retry_count > _MAX_RETRIES:
-                    yield "Comms error. Check Ollama/Groq status."
+                    logger.error("All retries exhausted")
+                    yield "Comms temporarily down. Try again in a moment."
                     return
 
                 delay = _RETRY_BASE_DELAY * (2 ** (retry_count - 1))
-                logger.warning("Retrying in %.1fs (attempt %d/%d)", delay, retry_count, _MAX_RETRIES)
+                logger.warning("Retry %d/%d in %.1fs: %s",
+                               retry_count, _MAX_RETRIES, delay, exc)
                 time.sleep(delay)
                 buffer = ""
                 full_response = ""

@@ -25,7 +25,7 @@
 | Feature | Description |
 |---------|-------------|
 | 🎤 **Voice Input** | Real-time speech recognition via faster-whisper (GPU, multilingual) |
-| 🧠 **Dual LLM** | Groq cloud (250+ tok/s, free) or Ollama local — auto-selects |
+| 🧠 **Dual LLM** | Groq cloud (250+ tok/s, free) + Ollama local with **auto-failover** |
 | 🔊 **Neural TTS** | Microsoft edge-tts with per-sentence language detection |
 | 🎭 **Live Procedural Avatar** | Fully code-drawn character — face, eyes, mouth, hair rendered from scratch each frame |
 | 🎵 **Lip Sync** | RMS amplitude → mouth region blend (20ms resolution) |
@@ -40,6 +40,8 @@
 | 💬 **Chat History** | Auto-saves session logs for review |
 | 🔔 **Sound Effects** | Audio cues for mode transitions |
 | 🌍 **Language Selector** | UI dropdown to switch language on-the-fly |
+| ⚡ **Auto-Failover** | Groq rate-limit → instant Ollama switch → auto switch-back |
+| 🔇 **Smart Barge-In** | Interrupt the AI mid-speech (keyboard/laughter ignored, real speech detected) |
 
 ## 🏗 Architecture
 
@@ -108,7 +110,7 @@ All settings are in `.env`:
 |----------|---------|-------------|
 | `GROQ_API_KEY` | — | Groq cloud API key (primary, fastest) |
 | `GROQ_MODEL` | `llama-3.3-70b-versatile` | Groq model |
-| `OLLAMA_MODEL` | `qwen2.5:3b` | Ollama fallback model |
+| `OLLAMA_MODEL` | `qwen2.5:7b` | Ollama fallback model |
 | `OLLAMA_NUM_CTX` | `2048` | Context window size |
 | `WHISPER_MODEL` | `small` | Whisper model size (`tiny`, `base`, `small`, `medium`) |
 | `TTS_VOICE` | `af_heart` | Kokoro fallback voice |
@@ -191,15 +193,42 @@ python -c "from voice_output import VoiceOutput; from voice_input import VoiceIn
 
 ## 📝 Contributing
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/my-feature`)
-3. Commit your changes (`git commit -am 'Add my feature'`)
-4. Push to the branch (`git push origin feature/my-feature`)
-5. Open a Pull Request
+This is a personal project. Feel free to fork and adapt for your own use.
 
 ## 📄 License
 
 This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
+
+## 🚀 Future Roadmap
+
+Planned improvements to push quality, speed, and intelligence:
+
+### AI & LLM
+| Improvement | Impact | Description |
+|---|---|---|
+| **Google Gemini API** | ⚡ More free tokens | 1,500 req/day free tier — 3rd engine option |
+| **Context compression** | 🧠 Smarter memory | Summarize old messages instead of dropping them |
+| **RAG with Tarkov wiki** | 🎯 Better accuracy | Live item/map/quest data instead of static reference |
+| **Response quality scoring** | 📊 Self-improvement | Score responses and tune prompts based on feedback |
+| **Streaming function calls** | 🔧 Actions | Let the AI trigger in-game overlays, timers, etc. |
+
+### Voice & Audio
+| Improvement | Impact | Description |
+|---|---|---|
+| **Voice cloning** | 🎭 Custom personality | Clone a specific voice for the AI character |
+| **Whisper large-v3** | 🎤 Better STT | More accurate transcription (needs GPU) |
+| **Faster TTS (Kokoro v2)** | ⚡ Lower latency | Sub-200ms first-byte TTS |
+| **Emotion-aware TTS** | 😊 Natural speech | Adjust TTS pitch/rate based on detected emotion |
+| **Noise cancellation** | 🔇 Cleaner input | RNNoise or similar for keyboard/background filtering |
+
+### Avatar & UI
+| Improvement | Impact | Description |
+|---|---|---|
+| **Live2D avatar** | 🎭 Premium look | Replace sprite compositing with Live2D rigging |
+| **Emotion-driven expressions** | 😊 Richer reactions | More expression states (angry, surprised, sad) |
+| **Webcam face tracking** | 👁️ Mirror user | Map user expressions to avatar |
+| **3D avatar (Three.js)** | 🌟 Next-gen | Full 3D model with physics-based animation |
+| **Custom avatar builder** | 🎨 User choice | Let users pick/design their own AI companion |
 
 ## 🙏 Acknowledgments
 

@@ -60,6 +60,9 @@ class PMCOverwatch:
         self._ptt_active = threading.Event()
         self._ptt_toggle_on = False
 
+        # ── Shared barge-in interrupt event ───────────────────────────
+        self._interrupt_event = threading.Event()
+
         # ── Components ─────────────────────────────────────────────────
         self._vc = VideoCapture()
         self._vi = VoiceInput(shutdown_event=self._shutdown, gui_log=self._gui.log)
@@ -68,6 +71,7 @@ class PMCOverwatch:
             on_speak_start=lambda: self._gui.set_vis_mode("speaking"),
             on_speak_end=lambda: self._gui.set_vis_mode("thinking"),
             on_amplitude=lambda a: self._gui.set_amplitude(a),
+            interrupt_event=self._interrupt_event,
         )
 
         self._brain: Optional[Brain] = None
@@ -75,8 +79,9 @@ class PMCOverwatch:
         self._running = False
         self._latest_frame_path = "latest_frame.jpg"
 
-        # Hook up GUI toggle
+        # Hook up GUI callbacks
         self._gui.set_toggle_callback(self._on_toggle)
+        self._gui.set_chat_callback(self._on_chat_message)
 
         # Initialize brain in background so GUI appears instantly
         threading.Thread(
@@ -263,6 +268,13 @@ class PMCOverwatch:
         )
         thread.start()
 
+    # ── Chat text message handler ─────────────────────────────────────
+    def _on_chat_message(self, text: str) -> None:
+        """Called by the GUI when the user types a chat message."""
+        if not text.strip():
+            return
+        self._process_interaction(text_prompt=text)
+
     # ── Core interaction pipeline ─────────────────────────────────────
     def _process_interaction(
         self,
@@ -314,6 +326,10 @@ class PMCOverwatch:
 
         response_start = time.monotonic()
 
+        # Reset and start barge-in monitor
+        self._vo.reset_interrupt()
+        self._vi.start_bargein_monitor(self._interrupt_event)
+
         # Collect sentences and detect emotion
         sentences = self._brain.stream_sentences(text_prompt)
         first_emotion_set = False
@@ -328,11 +344,42 @@ class PMCOverwatch:
                 yield sentence
 
         self._vo.speak_streamed(_sentences_with_emotion())
+
+        # Stop barge-in monitor and check for captured audio
+        bargein_audio_path = self._vi.stop_bargein_monitor()
+        was_interrupted = self._vo.was_interrupted()
+
         elapsed = time.monotonic() - response_start
-        logger.info("Response cycle completed in %.1fs", elapsed)
+        logger.info("Response cycle completed in %.1fs (interrupted=%s)",
+                    elapsed, was_interrupted)
 
         # Reset emotion after speaking
         self._gui.set_emotion("neutral")
+
+        # ── Handle barge-in: transcribe + process immediately ──────
+        if was_interrupted and bargein_audio_path:
+            self._gui.log("[Barge-in] Interrupted -- processing your input...")
+            self._gui.set_status("Transcribing...")
+            self._gui.set_vis_mode("listening")
+
+            transcription = self._vi.transcribe(bargein_audio_path)
+
+            # Clean up barge-in audio
+            try:
+                import os as _os
+                if _os.path.exists(bargein_audio_path):
+                    _os.remove(bargein_audio_path)
+            except OSError:
+                pass
+
+            if transcription and transcription.strip():
+                self._gui.log(f"[You] {transcription}")
+                logger.info("Barge-in transcription: %s", transcription)
+                # Process the barge-in input as a new interaction
+                self._process_interaction(text_prompt=transcription)
+                return
+            else:
+                self._gui.log("[Barge-in] Could not understand -- resuming listening.")
 
         # Revert to listening or offline
         if self._running:

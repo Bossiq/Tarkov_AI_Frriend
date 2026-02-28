@@ -16,3 +16,4 @@ python-dotenv
 customtkinter
 Pillow
 edge-tts
+google-genai

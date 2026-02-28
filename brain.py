@@ -1,15 +1,18 @@
 """
-AI Brain — dual-engine LLM for PMC Overwatch.
+AI Brain -- triple-engine LLM for PMC Overwatch.
 
-Primary:  Groq cloud API (250+ tokens/sec, free tier)
-Fallback: Ollama local inference
+Engines (in priority order):
+  1. Groq cloud API  (250+ tok/s, free tier)
+  2. Google Gemini   (1500 req/day free, smart)
+  3. Ollama local    (offline fallback)
 
 Features:
-  • Auto-selects Groq if GROQ_API_KEY is set, else Ollama
-  • Auto-failover: Groq rate-limit → Ollama → auto switch-back
-  • Streaming sentence-by-sentence for instant TTS
-  • Sliding-window conversation memory
-  • Retry logic with exponential backoff
+  * Automatic failover chain: Groq -> Gemini -> Ollama
+  * Context compression (summarize old messages instead of dropping)
+  * Streaming sentence-by-sentence for instant TTS
+  * Sliding-window conversation memory
+  * Retry logic with exponential backoff
+  * Never returns comms error if any engine is reachable
 """
 
 import logging
@@ -22,19 +25,23 @@ from typing import Generator, Optional
 
 logger = logging.getLogger(__name__)
 
-# ── Constants ────────────────────────────────────────────────────────
-_DEFAULT_OLLAMA_MODEL = "qwen2.5:3b"
+# -- Constants -----------------------------------------------------------------
+_DEFAULT_OLLAMA_MODEL = "qwen2.5:7b"
 _DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
-_GROQ_FALLBACK_MODEL = "llama-3.1-8b-instant"  # faster, separate rate limits
+_GROQ_FALLBACK_MODEL = "llama-3.1-8b-instant"
+_DEFAULT_GEMINI_MODEL = "gemini-2.0-flash"
 _DEFAULT_NUM_CTX = 2048
 _DEFAULT_NUM_PREDICT = 512
 _DEFAULT_NUM_BATCH = 512
+_DEFAULT_NUM_GPU = 99
+_DEFAULT_KEEP_ALIVE = "10m"
 _DEFAULT_TEMPERATURE = 0.6
 _DEFAULT_TOP_P = 0.85
 _DEFAULT_REPEAT_PENALTY = 1.1
-_MAX_MEMORY = 4
+_MAX_MEMORY = 6       # more messages before compression kicks in
 _MAX_RETRIES = 5
 _RETRY_BASE_DELAY = 1.0
+_COMPRESS_THRESHOLD = 8  # compress when memory exceeds this many messages
 
 from tarkov_data import QUEST_REFERENCE  # noqa: E402
 from expression_engine import (  # noqa: E402
@@ -121,12 +128,15 @@ def _parse_cooldown_seconds(exc: Exception) -> float:
 
 
 class Brain:
-    """Dual-engine LLM: Groq cloud (primary) + Ollama local (fallback).
+    """Triple-engine LLM: Groq -> Gemini -> Ollama.
 
-    Auto-failover: when Groq hits a rate limit, instantly switches to
-    Ollama local, then switches back after the cooldown expires.
-    If Ollama is unavailable, waits out the Groq cooldown with backoff.
+    Auto-failover chain: if the current engine fails (rate-limit,
+    connection error), instantly tries the next engine in the chain.
+    Never returns 'comms error' if any engine is reachable.
     """
+
+    # Engine priority order
+    _ENGINE_CHAIN = ["groq", "gemini", "ollama"]
 
     def __init__(self) -> None:
         self._interrupt = threading.Event()
@@ -134,115 +144,148 @@ class Brain:
         self._top_p = _DEFAULT_TOP_P
         self._repeat_penalty = _DEFAULT_REPEAT_PENALTY
         self._num_ctx = int(os.getenv("OLLAMA_NUM_CTX", str(_DEFAULT_NUM_CTX)))
-        self._lock = threading.Lock()  # protect engine switching
+        self._lock = threading.Lock()
 
-        # Conversation memory — sliding window
+        # Conversation memory -- sliding window
         self._memory: deque[dict] = deque(maxlen=_MAX_MEMORY * 2)
-        # Rate limit cooldown — skip primary model until this timestamp
         self._rate_limit_until: float = 0.0
 
-        # ── Init both engines (best-effort) ──────────────────────────
+        # -- Engine clients (all best-effort) --
+        self._engines: dict[str, bool] = {}  # engine_name -> available
+
+        # Groq
         self._groq_key = os.getenv("GROQ_API_KEY", "").strip()
         self._groq_client = None
         self._groq_model = os.getenv("GROQ_MODEL", _DEFAULT_GROQ_MODEL)
-        self._ollama_client = None
-        self._ollama_model = os.getenv("OLLAMA_MODEL", _DEFAULT_OLLAMA_MODEL)
-        self._ollama_available = False
         self._groq_cooldown_until = 0.0
-
-        # Groq
         if self._groq_key:
             try:
                 import groq
                 self._groq_client = groq.Groq(api_key=self._groq_key)
+                self._engines["groq"] = True
                 logger.info("Groq cloud ready (model=%s)", self._groq_model)
             except Exception:
                 logger.exception("Groq init failed")
 
-        # Ollama (best-effort — verify model is actually pulled)
+        # Gemini
+        self._gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
+        self._gemini_client = None
+        self._gemini_model = os.getenv("GEMINI_MODEL", _DEFAULT_GEMINI_MODEL)
+        self._gemini_cooldown_until = 0.0
+        if self._gemini_key:
+            try:
+                from google import genai
+                self._gemini_client = genai.Client(api_key=self._gemini_key)
+                self._engines["gemini"] = True
+                logger.info("Gemini ready (model=%s)", self._gemini_model)
+            except Exception:
+                logger.exception("Gemini init failed")
+
+        # Ollama
+        self._ollama_client = None
+        self._ollama_model = os.getenv("OLLAMA_MODEL", _DEFAULT_OLLAMA_MODEL)
+        self._ollama_available = False
         try:
             import ollama
             self._ollama_client = ollama.Client()
             models = self._ollama_client.list()
-            # Check if our exact model is available
             model_names = []
             if hasattr(models, 'models'):
                 model_names = [m.model for m in models.models]
             elif isinstance(models, dict):
                 model_names = [m.get("model", "") for m in models.get("models", [])]
-            # Exact match required
-            target = self._ollama_model
-            model_found = target in model_names
-            if model_found:
+            if self._ollama_model in model_names:
                 self._ollama_available = True
+                self._engines["ollama"] = True
                 logger.info("Ollama local ready (model=%s, ctx=%d)",
                             self._ollama_model, self._num_ctx)
             else:
                 logger.warning(
-                    "Ollama running but model '%s' not found. "
-                    "Available: %s. Run: ollama pull %s",
-                    self._ollama_model,
-                    ", ".join(model_names) or "none",
-                    self._ollama_model,
-                )
+                    "Ollama running but model '%s' not found. Available: %s",
+                    self._ollama_model, ", ".join(model_names) or "none")
         except Exception:
-            logger.info("Ollama not available (not running or not installed)")
+            logger.info("Ollama not available")
 
-        # Pick primary engine
-        if self._groq_client:
-            self._engine = "groq"
-            self._model = self._groq_model
-        elif self._ollama_available:
-            self._engine = "ollama"
-            self._model = self._ollama_model
-        else:
+        # Pick primary engine (first available in chain)
+        self._engine = None
+        self._model = None
+        for eng in self._ENGINE_CHAIN:
+            if self._engines.get(eng):
+                self._engine = eng
+                self._model = self._get_model_for_engine(eng)
+                break
+        if not self._engine:
             raise ConnectionError(
-                "No LLM engine available. Set GROQ_API_KEY or start Ollama."
+                "No LLM engine available. Set GROQ_API_KEY, GEMINI_API_KEY, or start Ollama."
             )
 
-        logger.info("Brain active: %s (%s) | fallback: %s",
-                     self._engine, self._model,
-                     "ollama" if self._ollama_available and self._engine != "ollama"
-                     else "none")
+        available = [e for e in self._ENGINE_CHAIN if self._engines.get(e)]
+        logger.info("Brain active: %s (%s) | engines: %s",
+                     self._engine, self._model, " -> ".join(available))
 
-    # ── Engine switching ──────────────────────────────────────────────
-    def _failover_to_ollama(self, cooldown_seconds: float) -> bool:
-        """Switch to Ollama. Returns True if Ollama is available."""
-        if not self._ollama_available:
+    def _get_model_for_engine(self, engine: str) -> str:
+        return {"groq": self._groq_model, "gemini": self._gemini_model,
+                "ollama": self._ollama_model}.get(engine, "")
+
+    # -- Failover chain --------------------------------------------------------
+    def _next_engine(self, current: str) -> Optional[str]:
+        """Get the next available engine in the failover chain."""
+        chain = self._ENGINE_CHAIN
+        try:
+            idx = chain.index(current)
+        except ValueError:
+            idx = -1
+        for eng in chain[idx + 1:] + chain[:idx]:
+            if eng != current and self._engines.get(eng):
+                return eng
+        return None
+
+    def _switch_engine(self, target: str, cooldown_source: Optional[str] = None,
+                       cooldown_seconds: float = 0) -> bool:
+        """Switch to a specific engine. Returns True if successful."""
+        if not self._engines.get(target):
             return False
         with self._lock:
-            self._engine = "ollama"
-            self._model = self._ollama_model
-            self._groq_cooldown_until = time.monotonic() + cooldown_seconds
-        logger.info("Failover -> Ollama (Groq cooldown %.0fs)", cooldown_seconds)
+            self._engine = target
+            self._model = self._get_model_for_engine(target)
+            if cooldown_source == "groq":
+                self._groq_cooldown_until = time.monotonic() + cooldown_seconds
+            elif cooldown_source == "gemini":
+                self._gemini_cooldown_until = time.monotonic() + cooldown_seconds
+        logger.info("Switched -> %s (%s)", target, self._model)
 
-        # Schedule auto switch-back
-        def _restore():
-            with self._lock:
-                if self._groq_client and self._engine == "ollama":
-                    self._engine = "groq"
-                    self._model = self._groq_model
-                    logger.info("Auto-restored -> Groq (cooldown expired)")
-        timer = threading.Timer(cooldown_seconds, _restore)
-        timer.daemon = True
-        timer.start()
+        # Schedule auto-restore if there's a cooldown
+        if cooldown_source and cooldown_seconds > 0:
+            def _restore():
+                with self._lock:
+                    if self._engines.get(cooldown_source):
+                        self._engine = cooldown_source
+                        self._model = self._get_model_for_engine(cooldown_source)
+                        logger.info("Cooldown expired -> restored %s", cooldown_source)
+            timer = threading.Timer(cooldown_seconds, _restore)
+            timer.daemon = True
+            timer.start()
         return True
 
-    def _maybe_restore_groq(self) -> None:
-        """Check if Groq cooldown expired and restore it as primary."""
-        if (self._engine == "ollama" and self._groq_client
-                and self._groq_cooldown_until > 0
-                and time.monotonic() >= self._groq_cooldown_until):
-            with self._lock:
-                self._engine = "groq"
-                self._model = self._groq_model
-                self._groq_cooldown_until = 0.0
-            logger.info("Restored -> Groq (cooldown expired)")
+    def _failover(self, failed_engine: str, exc: Exception) -> bool:
+        """Try to failover to the next available engine. Returns True if switched."""
+        cooldown = 0.0
+        if _is_rate_limit_error(exc):
+            cooldown = _parse_cooldown_seconds(exc)
+
+        next_eng = self._next_engine(failed_engine)
+        if next_eng and self._switch_engine(
+            next_eng, cooldown_source=failed_engine, cooldown_seconds=cooldown
+        ):
+            logger.info("Failover: %s -> %s (cooldown %.0fs)",
+                        failed_engine, next_eng, cooldown)
+            return True
+        return False
 
     def _warmup(self) -> None:
-        """Send a tiny request to pre-load the model into VRAM."""
+        """Send a tiny request to pre-load the model."""
         try:
-            logger.info("Warming up %s (%s) …", self._engine, self._model)
+            logger.info("Warming up %s (%s)", self._engine, self._model)
             if self._engine == "ollama":
                 self._ollama_client.chat(
                     model=self._model,
@@ -256,19 +299,51 @@ class Brain:
                     messages=[{"role": "user", "content": "hi"}],
                     max_tokens=1,
                 )
+            elif self._engine == "gemini":
+                self._gemini_client.models.generate_content(
+                    model=self._gemini_model,
+                    contents="hi",
+                    config={"max_output_tokens": 1},
+                )
             logger.info("Brain warm-up complete (%s)", self._engine)
         except Exception:
-            logger.warning("Warm-up request failed (non-fatal)", exc_info=True)
+            logger.warning("Warm-up failed (non-fatal)", exc_info=True)
 
-    # ── Message helpers ───────────────────────────────────────────────
+    # -- Context compression ---------------------------------------------------
+    def _maybe_compress_memory(self) -> None:
+        """If memory is too large, compress older messages into a summary."""
+        if len(self._memory) < _COMPRESS_THRESHOLD:
+            return
+
+        # Take the oldest half of messages for compression
+        half = len(self._memory) // 2
+        old_msgs = list(self._memory)[:half]
+
+        # Build a simple summary from the old messages
+        summary_parts = []
+        for msg in old_msgs:
+            role = msg["role"]
+            content = msg["content"]
+            if role == "user":
+                summary_parts.append(f"User asked: {content[:100]}")
+            else:
+                summary_parts.append(f"AI replied: {content[:100]}")
+
+        summary = "[Earlier conversation summary: " + " | ".join(summary_parts) + "]"
+
+        # Remove old messages and prepend summary
+        for _ in range(half):
+            self._memory.popleft()
+        self._memory.appendleft({"role": "system", "content": summary})
+        logger.info("Memory compressed: %d messages -> summary + %d recent",
+                    half, len(self._memory) - 1)
+
+    # -- Message helpers -------------------------------------------------------
     def _build_messages(self, user_prompt: str) -> list[dict]:
-        """Build the full message list: system + memory + current prompt.
+        """Build the full message list: system + memory + current prompt."""
+        # Compress memory if it's getting large
+        self._maybe_compress_memory()
 
-        Quest reference data (~3000 tokens) is only injected when the user
-        mentions quests, tasks, or trader names — saving ~73% of tokens
-        for regular conversations.
-        """
-        # Inject quest data only when relevant
         system = _SYSTEM_CORE
         if _QUEST_KEYWORDS.search(user_prompt):
             system += "\n\nUSE THIS REFERENCE for accurate Tarkov info:\n" + QUEST_REFERENCE
@@ -308,29 +383,21 @@ class Brain:
         retry_count = 0
 
         while retry_count <= _MAX_RETRIES:
-            # Skip primary model if we know it's still rate-limited
             use_fallback = (
                 self._engine == "groq"
                 and self._model != _GROQ_FALLBACK_MODEL
                 and time.time() < self._rate_limit_until
             )
             if use_fallback:
-                logger.info(
-                    "Primary model still rate-limited (%.0fs left), using fallback",
-                    self._rate_limit_until - time.time()
-                )
+                logger.info("Primary model rate-limited, using Groq fallback")
                 old_model = self._model
                 self._model = _GROQ_FALLBACK_MODEL
 
             try:
-                # Check if we can restore Groq
-                self._maybe_restore_groq()
-
-                logger.info("Streaming from %s (%s) …", self._engine, self._model)
+                logger.info("Streaming from %s (%s)", self._engine, self._model)
                 messages = self._build_messages(text_prompt)
 
                 for token in self._stream_tokens(messages):
-                    # ── Barge-in: stop consuming tokens ──────────
                     if self._interrupt.is_set():
                         logger.info("LLM stream interrupted (barge-in)")
                         remainder = buffer.strip()
@@ -346,16 +413,11 @@ class Brain:
                         for sentence in parts[:-1]:
                             sentence = sentence.strip()
                             if sentence:
-                                logger.debug("Sentence ready: %s", sentence[:60])
+                                logger.debug("Sentence: %s", sentence[:60])
                                 full_response += sentence + " "
                                 yield sentence
                         buffer = parts[-1]
-                    # ── Early flush: if 14+ words without sentence break,
-                    # flush at comma or space so TTS starts sooner ──
-                    # (Romanian sentences are longer than English; lower values
-                    #  chop mid-thought and confuse TTS language detection)
                     elif len(buffer.split()) >= 14:
-                        # Try to break at comma
                         comma_idx = buffer.rfind(",")
                         if comma_idx > 10:
                             flush = buffer[:comma_idx + 1].strip()
@@ -364,22 +426,17 @@ class Brain:
                             flush = buffer.strip()
                             buffer = ""
                         if flush:
-                            logger.debug("Early flush (%d words): %s",
-                                         len(flush.split()), flush[:60])
                             full_response += flush + " "
                             yield flush
 
                 if not self._interrupt.is_set():
-                    # Yield remaining text (normal completion)
                     remainder = buffer.strip()
                     if remainder:
                         full_response += remainder
                         yield remainder
 
-                # Remember assistant response (full or partial)
                 if full_response.strip():
                     self._remember("assistant", full_response.strip())
-                # Restore primary model if we used fallback via cooldown check
                 if use_fallback:
                     self._model = old_model
                 return
@@ -387,35 +444,25 @@ class Brain:
             except Exception as exc:
                 logger.warning("%s error: %s", self._engine, exc)
 
-                # ── Rate-limit → try instant failover ────────────────
-                if _is_rate_limit_error(exc) and self._engine == "groq":
-                    cooldown = _parse_cooldown_seconds(exc)
-                    logger.info("Groq rate-limited (cooldown %.0fs)", cooldown)
+                # Restore model name if we were using fallback
+                if use_fallback:
+                    self._model = old_model
 
-                    if self._failover_to_ollama(cooldown):
-                        # Retry immediately with Ollama
-                        buffer = ""
-                        full_response = ""
-                        continue
-                    else:
-                        # No Ollama → wait out the Groq cooldown
-                        wait = min(cooldown, 60.0)  # cap single wait at 60s
-                        logger.info("No Ollama fallback — waiting %.0fs for Groq", wait)
-                        time.sleep(wait)
-                        buffer = ""
-                        full_response = ""
-                        continue
+                # -- Try failover to next engine in chain --
+                if self._failover(self._engine, exc):
+                    buffer = ""
+                    full_response = ""
+                    continue
 
-                # ── Generic error → retry with backoff ───────────────
+                # -- No failover available, retry with backoff --
                 retry_count += 1
                 if retry_count > _MAX_RETRIES:
-                    logger.error("All retries exhausted")
+                    logger.error("All retries exhausted on all engines")
                     yield "Comms temporarily down. Try again in a moment."
                     return
 
                 delay = _RETRY_BASE_DELAY * (2 ** (retry_count - 1))
-                logger.warning("Retry %d/%d in %.1fs: %s",
-                               retry_count, _MAX_RETRIES, delay, exc)
+                logger.warning("Retry %d/%d in %.1fs", retry_count, _MAX_RETRIES, delay)
                 time.sleep(delay)
                 buffer = ""
                 full_response = ""
@@ -425,11 +472,13 @@ class Brain:
         self._memory.clear()
         logger.info("Conversation memory cleared")
 
-    # ── Streaming backends ────────────────────────────────────────────
+    # -- Streaming backends ----------------------------------------------------
     def _stream_tokens(self, messages: list[dict]) -> Generator[str, None, None]:
         """Yield individual tokens from the active engine."""
         if self._engine == "groq":
             yield from self._stream_groq(messages)
+        elif self._engine == "gemini":
+            yield from self._stream_gemini(messages)
         else:
             yield from self._stream_ollama(messages)
 
@@ -447,6 +496,36 @@ class Brain:
             delta = chunk.choices[0].delta
             if delta and delta.content:
                 yield delta.content
+
+    def _stream_gemini(self, messages: list[dict]) -> Generator[str, None, None]:
+        """Stream tokens from Google Gemini API."""
+        # Convert messages to Gemini format
+        system_msg = ""
+        contents = []
+        for msg in messages:
+            if msg["role"] == "system":
+                system_msg += msg["content"] + "\n"
+            elif msg["role"] == "user":
+                contents.append({"role": "user", "parts": [{"text": msg["content"]}]})
+            elif msg["role"] == "assistant":
+                contents.append({"role": "model", "parts": [{"text": msg["content"]}]})
+
+        config = {
+            "temperature": self._temperature,
+            "top_p": self._top_p,
+            "max_output_tokens": _DEFAULT_NUM_PREDICT,
+        }
+        if system_msg:
+            config["system_instruction"] = system_msg.strip()
+
+        response = self._gemini_client.models.generate_content_stream(
+            model=self._gemini_model,
+            contents=contents,
+            config=config,
+        )
+        for chunk in response:
+            if chunk.text:
+                yield chunk.text
 
     def _stream_ollama(self, messages: list[dict]) -> Generator[str, None, None]:
         """Stream tokens from local Ollama."""

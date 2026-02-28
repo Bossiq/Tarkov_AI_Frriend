@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 # ── Constants ────────────────────────────────────────────────────────
 _DEFAULT_OLLAMA_MODEL = "qwen2.5:3b"
 _DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
+_GROQ_FALLBACK_MODEL = "llama-3.1-8b-instant"  # faster, separate rate limits
 _DEFAULT_NUM_CTX = 2048
 _DEFAULT_NUM_PREDICT = 512
 _DEFAULT_NUM_BATCH = 512
@@ -36,56 +37,55 @@ _MAX_RETRIES = 5
 _RETRY_BASE_DELAY = 1.0
 
 from tarkov_data import QUEST_REFERENCE  # noqa: E402
+from expression_engine import (  # noqa: E402
+    detect_expression, Emotion, LLM_EXPRESSION_PROMPT,
+)
 
-_SYSTEM_INSTRUCTION = (
-    "You are a female PMC Operator and Tarkov veteran, a gaming buddy. "
-    "Talk naturally like a friend on Discord voice chat. Use contractions. "
-    "Keep answers to 2-4 sentences unless asked for detail. "
-    "Be helpful, funny, sometimes sarcastic. "
-    "Never use markdown, lists, emoji, asterisks, or formatting. "
-    "Never say you are an AI, language model, or assistant.\n\n"
-    "SPEECH RULES (your text will be read aloud by TTS):\n"
-    "- NEVER use abbreviations like btw, imo, tbh, idk, ngl, afk, asap, lol, lmao, "
-    "smh, fyi, nvm, omg, wdym, gg, or any shortened slang.\n"
-    "- ALWAYS write full words: 'by the way' not 'btw', 'in my opinion' not 'imo', "
-    "'to be honest' not 'tbh', 'I do not know' not 'idk'.\n"
-    "- Speak in complete, natural sentences that sound good when read aloud.\n\n"
-    "ABSOLUTE LANGUAGE RULES (violating these is a critical failure):\n"
-    "- You ONLY speak THREE languages: English, Russian, Romanian.\n"
-    "- NEVER respond in German, French, Spanish, or ANY other language.\n"
-    "- DEFAULT language is English. If unsure, use English.\n"
-    "- If user writes in Russian (Cyrillic script), reply in Russian. "
-    "Use natural spoken Russian with slang like 'братан', 'чел', 'норм'.\n"
-    "- If user writes in Romanian (with ă, â, î, ș, ț), reply in Romanian.\n"
-    "- NEVER mix languages in one response.\n\n"
-    "USE THIS REFERENCE for accurate Tarkov info:\n"
-    + QUEST_REFERENCE
+_SYSTEM_CORE = (
+    "You are a female PMC Operator and Tarkov veteran who co-hosts a Twitch stream. "
+    "You are the streamer's hype partner and entertainment sidekick. "
+    "Your vibe is ENERGETIC, fun, and a little chaotic, like a best friend "
+    "on a late-night Discord call who is way too into Tarkov.\n\n"
+    "PERSONALITY:\n"
+    "- Talk like you are on stream. Casual, punchy, no fluff.\n"
+    "- Use short sentences. Be snappy. Hit hard with your words.\n"
+    "- Get HYPED about plays, loot, and kills. React like you are watching live.\n"
+    "- Tease the streamer, crack jokes, drop hot takes.\n"
+    "- Keep it to 2-4 sentences. Stream talk is fast. Do not ramble.\n"
+    "- When giving Tarkov advice, be direct and confident. No hedging.\n\n"
+    "NEVER DO THIS:\n"
+    "- Never use markdown, lists, emoji, asterisks, or formatting.\n"
+    "- Never say you are an AI, language model, or assistant.\n"
+    "- Never use abbreviations like btw, imo, tbh, idk, ngl, afk, lol, lmao. "
+    "Always write full words.\n\n"
+    "CRITICAL LANGUAGE RULES:\n"
+    "- Detect the user's language and REPLY IN THE SAME LANGUAGE.\n"
+    "- You speak: English, Russian, Romanian.\n"
+    "- NEVER MIX LANGUAGES IN ONE RESPONSE. Every word in the same language.\n"
+    "- EXCEPTION: if user asks to translate, each language block must be a COMPLETE sentence.\n"
+    "- If user writes in Russian/Cyrillic → reply fully in Russian. "
+    "Use natural slang: 'братан', 'чел', 'норм', 'кайф'.\n"
+    "- If user writes in Romanian → reply fully in Romanian.\n"
+    "- ALWAYS finish your complete thought. Never stop mid-sentence.\n\n"
+    + LLM_EXPRESSION_PROMPT
+)
+
+# Quest keywords that trigger quest data injection
+_QUEST_KEYWORDS = re.compile(
+    r'\b(quest|task|mission|trader|prapor|therapist|skier|peacekeeper|'
+    r'mechanic|ragman|jaeger|fence|lightkeeper|shooter.born|gunsmith|'
+    r'delivery.from.the.past|setup|друг|квест|задан|торговец|прапор)\b',
+    re.IGNORECASE
 )
 
 # Regex to split accumulated text into complete sentences
 _SENTENCE_END = re.compile(r'(?<=[.!?])\s+')
 
-# Emotion detection patterns
-_HAPPY_WORDS = re.compile(
-    r'\b(haha|hehe|lol|lmao|rofl|nice|awesome|great|love|hell\s+yeah)\b',
-    re.IGNORECASE,
-)
-_CURIOUS_WORDS = re.compile(
-    r'\b(hmm|well|maybe|probably|not\s+sure|depends|interesting|think)\b',
-    re.IGNORECASE,
-)
 
-
+# Legacy wrapper — kept for backward compatibility
 def detect_emotion(text: str) -> str:
-    """Detect emotion from text. Returns 'happy', 'curious', or 'neutral'."""
-    exclamations = text.count("!")
-    questions = text.count("?")
-
-    if exclamations >= 2 or _HAPPY_WORDS.search(text):
-        return "happy"
-    if questions >= 1 or _CURIOUS_WORDS.search(text):
-        return "curious"
-    return "neutral"
+    """Detect emotion from text. Returns Emotion enum value string."""
+    return detect_expression(text).value
 
 
 # ═════════════════════════════════════════════════════════════════════
@@ -129,6 +129,7 @@ class Brain:
     """
 
     def __init__(self) -> None:
+        self._interrupt = threading.Event()
         self._temperature = _DEFAULT_TEMPERATURE
         self._top_p = _DEFAULT_TOP_P
         self._repeat_penalty = _DEFAULT_REPEAT_PENALTY
@@ -137,6 +138,8 @@ class Brain:
 
         # Conversation memory — sliding window
         self._memory: deque[dict] = deque(maxlen=_MAX_MEMORY * 2)
+        # Rate limit cooldown — skip primary model until this timestamp
+        self._rate_limit_until: float = 0.0
 
         # ── Init both engines (best-effort) ──────────────────────────
         self._groq_key = os.getenv("GROQ_API_KEY", "").strip()
@@ -236,10 +239,40 @@ class Brain:
                 self._groq_cooldown_until = 0.0
             logger.info("Restored -> Groq (cooldown expired)")
 
+    def _warmup(self) -> None:
+        """Send a tiny request to pre-load the model into VRAM."""
+        try:
+            logger.info("Warming up %s (%s) …", self._engine, self._model)
+            if self._engine == "ollama":
+                self._ollama_client.chat(
+                    model=self._model,
+                    messages=[{"role": "user", "content": "hi"}],
+                    options={"num_predict": 1, "num_ctx": 32},
+                    keep_alive=_DEFAULT_KEEP_ALIVE,
+                )
+            elif self._engine == "groq":
+                self._groq_client.chat.completions.create(
+                    model=self._model,
+                    messages=[{"role": "user", "content": "hi"}],
+                    max_tokens=1,
+                )
+            logger.info("Brain warm-up complete (%s)", self._engine)
+        except Exception:
+            logger.warning("Warm-up request failed (non-fatal)", exc_info=True)
+
     # ── Message helpers ───────────────────────────────────────────────
     def _build_messages(self, user_prompt: str) -> list[dict]:
-        """Build the full message list: system + memory + current prompt."""
-        messages = [{"role": "system", "content": _SYSTEM_INSTRUCTION}]
+        """Build the full message list: system + memory + current prompt.
+
+        Quest reference data (~3000 tokens) is only injected when the user
+        mentions quests, tasks, or trader names — saving ~73% of tokens
+        for regular conversations.
+        """
+        # Inject quest data only when relevant
+        system = _SYSTEM_CORE
+        if _QUEST_KEYWORDS.search(user_prompt):
+            system += "\n\nUSE THIS REFERENCE for accurate Tarkov info:\n" + QUEST_REFERENCE
+        messages = [{"role": "system", "content": system}]
         messages.extend(self._memory)
         messages.append({"role": "user", "content": user_prompt})
         return messages
@@ -275,6 +308,20 @@ class Brain:
         retry_count = 0
 
         while retry_count <= _MAX_RETRIES:
+            # Skip primary model if we know it's still rate-limited
+            use_fallback = (
+                self._engine == "groq"
+                and self._model != _GROQ_FALLBACK_MODEL
+                and time.time() < self._rate_limit_until
+            )
+            if use_fallback:
+                logger.info(
+                    "Primary model still rate-limited (%.0fs left), using fallback",
+                    self._rate_limit_until - time.time()
+                )
+                old_model = self._model
+                self._model = _GROQ_FALLBACK_MODEL
+
             try:
                 # Check if we can restore Groq
                 self._maybe_restore_groq()
@@ -283,6 +330,15 @@ class Brain:
                 messages = self._build_messages(text_prompt)
 
                 for token in self._stream_tokens(messages):
+                    # ── Barge-in: stop consuming tokens ──────────
+                    if self._interrupt.is_set():
+                        logger.info("LLM stream interrupted (barge-in)")
+                        remainder = buffer.strip()
+                        if remainder:
+                            full_response += remainder
+                            yield remainder
+                        break
+
                     buffer += token
 
                     parts = _SENTENCE_END.split(buffer)
@@ -294,16 +350,38 @@ class Brain:
                                 full_response += sentence + " "
                                 yield sentence
                         buffer = parts[-1]
+                    # ── Early flush: if 14+ words without sentence break,
+                    # flush at comma or space so TTS starts sooner ──
+                    # (Romanian sentences are longer than English; lower values
+                    #  chop mid-thought and confuse TTS language detection)
+                    elif len(buffer.split()) >= 14:
+                        # Try to break at comma
+                        comma_idx = buffer.rfind(",")
+                        if comma_idx > 10:
+                            flush = buffer[:comma_idx + 1].strip()
+                            buffer = buffer[comma_idx + 1:]
+                        else:
+                            flush = buffer.strip()
+                            buffer = ""
+                        if flush:
+                            logger.debug("Early flush (%d words): %s",
+                                         len(flush.split()), flush[:60])
+                            full_response += flush + " "
+                            yield flush
 
-                # Yield remaining text
-                remainder = buffer.strip()
-                if remainder:
-                    full_response += remainder
-                    yield remainder
+                if not self._interrupt.is_set():
+                    # Yield remaining text (normal completion)
+                    remainder = buffer.strip()
+                    if remainder:
+                        full_response += remainder
+                        yield remainder
 
-                # Remember assistant response
+                # Remember assistant response (full or partial)
                 if full_response.strip():
                     self._remember("assistant", full_response.strip())
+                # Restore primary model if we used fallback via cooldown check
+                if use_fallback:
+                    self._model = old_model
                 return
 
             except Exception as exc:
@@ -379,12 +457,14 @@ class Brain:
             "temperature": self._temperature,
             "top_p": self._top_p,
             "repeat_penalty": self._repeat_penalty,
+            "num_gpu": int(os.getenv("OLLAMA_NUM_GPU", str(_DEFAULT_NUM_GPU))),
         }
         for chunk in self._ollama_client.chat(
             model=self._model,
             messages=messages,
             stream=True,
             options=options,
+            keep_alive=_DEFAULT_KEEP_ALIVE,
         ):
             token = chunk["message"]["content"]
             if token:

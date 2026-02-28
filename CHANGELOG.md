@@ -2,6 +2,35 @@
 
 All notable changes to PMC Overwatch are documented here.
 
+## [0.25.0] — 2026-02-27
+
+### Added
+- **Spectral flatness filter** in `voice_input.py` — rejects chair squeaks, clicks, and non-speech transients
+- **Whisper hallucination rejection** — filters false positives like "thank you", "subscribe", single-word noise
+- **Rate-limit cooldown cache** in `brain.py` — prevents cascading failures when both Groq models are rate-limited
+- **Post-TTS cooldown** — 0.5s audio ignore window after TTS to prevent self-hearing loops
+- **Per-language TTS rate overrides** — Romanian/Russian voices stay at +0% regardless of EDGE_RATE setting
+- `WHISPER_LANGUAGE` env var for forcing transcription language
+
+### Changed
+- **TTS voice → Ava Multilingual** (`en-US-AvaMultilingualNeural`) — Microsoft's flagship neural voice
+- **System prompt compacted** — fewer tokens, clearer rules, reduced LLM latency
+- Conversation memory increased 4 → 8 turns for better context
+- Temperature lowered 1.0 → 0.7, top_p 0.95 → 0.9 for more focused responses
+- Pre-buffer chunks 5 → 10 (captures first syllable more reliably)
+- End-of-speech silence 0.7s → 1.2s (less premature cutoff)
+- Min speech duration 0.5s → 0.8s (reduces false triggers)
+- Expanded Romanian/Russian language detection with comprehensive word lists
+- Enhanced number-to-words expansion for TTS naturalness
+- Mic device switch no longer nulls threshold (prevents concurrent crash)
+
+### Fixed
+- Cascading rate-limit failures when both primary and fallback Groq models hit limits
+- False speech detections from environmental noise (squeaky chairs, keyboard clicks)
+- Whisper hallucinating "thank you" / "subscribe" on silence
+- Premature speech cutoff during natural pauses
+- TTS hearing itself through mic causing feedback loops
+
 ## [0.24.0] — 2026-02-26
 
 ### Added

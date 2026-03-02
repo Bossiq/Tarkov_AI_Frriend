@@ -317,14 +317,14 @@ class VoiceOutput:
         # TTS output to that language — eliminates mid-response voice
         # switches caused by per-sentence language detection.
         _wl = os.getenv("WHISPER_LANGUAGE", "auto").strip().lower()
-        self._forced_lang: str | None = _wl if _wl and _wl != "auto" else None
+        self._forced_lang: Optional[str] = _wl if _wl and _wl != "auto" else None
 
         # Persistent asyncio loop for edge-tts (avoid creating/destroying per call)
         self._edge_loop = asyncio.new_event_loop()
         self._edge_tts_mod = None  # cached module import
 
         # ── Barge-in interrupt support ─────────────────────────────
-        self._interrupt = threading.Event()
+        # NOTE: self._interrupt already set above from interrupt_event param
         self._was_interrupted = False
         self._speaking_started = threading.Event()  # set when audio playback begins
 
@@ -383,8 +383,6 @@ class VoiceOutput:
         if self._on_speak_start:
             self._on_speak_start()
         self._speaking_started.set()  # signal that audio is actually playing
-
-        interrupted = False
 
         interrupted = False
 
@@ -629,6 +627,9 @@ class VoiceOutput:
             clean = self._preprocess_for_speech(sentence)
             if not clean.strip():
                 continue
+
+            # Detect language per sentence for correct voice selection
+            lang = self._forced_lang or _detect_language(sentence)
 
             spoke = False
             if self._edge_available:

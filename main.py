@@ -84,6 +84,9 @@ class PMCOverwatch:
         # Hook up GUI callbacks
         self._gui.set_toggle_callback(self._on_toggle)
         self._gui.set_chat_callback(self._on_chat_message)
+        self._gui.set_mic_callback(
+            lambda idx: self._vi.set_device(idx, gui_log=self._gui.log)
+        )
 
         # Initialize brain in background so GUI appears instantly
         threading.Thread(
@@ -304,7 +307,6 @@ class PMCOverwatch:
                 if not audio_path:
                     return
 
-                # Instant feedback — user sees "Processing" the moment they stop talking
                 self._gui.set_status("Processing...")
                 self._gui.set_vis_mode("thinking")
                 self._gui.log("[STT] Speech captured, transcribing...")
@@ -323,9 +325,9 @@ class PMCOverwatch:
                     return
 
                 transcription, detected_lang = result
-                # Propagate detected language to TTS for smarter voice selection
-                self._vo.set_language_hint(detected_lang)
-                lang_label = {"en": "EN", "ro": "RO", "ru": "RU"}.get(detected_lang, detected_lang.upper())
+                lang_label = {"en": "EN", "ro": "RO", "ru": "RU"}.get(
+                    detected_lang, detected_lang.upper() if detected_lang else "??"
+                )
                 self._gui.log(f"[You] ({lang_label}) {transcription}")
                 text_prompt = transcription
 
@@ -348,79 +350,33 @@ class PMCOverwatch:
         self._vo.reset_interrupt()
         self._vi.start_bargein_monitor(self._interrupt_event)
 
-        # Collect sentences and detect emotion
-        sentences = self._brain.stream_sentences(text_prompt)
-        first_emotion_set = False
-
-        # Collect sentences and detect expression per sentence
+        # Stream sentences with expression detection
         sentences = self._brain.stream_sentences(text_prompt)
 
         def _sentences_with_expression():
             for sentence in sentences:
                 expression = detect_expression(sentence)
                 self._gui.set_expression(expression)
-                logger.debug("Expression: %s for '%s'", expression.value, sentence[:50])
                 yield sentence
 
-        self._vo.speak_streamed(_sentences_with_emotion())
+        try:
+            self._vo.speak_streamed(_sentences_with_expression())
+        except Exception:
+            logger.exception("speak_streamed error")
 
         # Stop barge-in monitor and check for captured audio
         bargein_audio_path = self._vi.stop_bargein_monitor()
         was_interrupted = self._vo.was_interrupted()
 
         elapsed = time.monotonic() - response_start
-        logger.info("Response cycle completed in %.1fs (interrupted=%s)",
-                    elapsed, was_interrupted)
 
-        def _barge_in_monitor():
-            """Background thread: watch mic for user speech during TTS.
-
-            The monitor keeps its InputStream open and records audio after
-            detection, bridging the gap until ``listen()`` opens its own.
-            """
-            # Wait until audio playback actually starts before monitoring.
-            if not self._vo._speaking_started.wait(timeout=60):
-                return
-            if monitor_stop.is_set():
-                return
-            self._vi.monitor_for_speech(monitor_stop)
-
-        def _barge_in_trigger():
-            """Wait for the detection event, then interrupt output."""
-            self._vi._bargein_detected.wait()
-            if not monitor_stop.is_set():
-                logger.info("Barge-in detected — interrupting playback")
-                self._vo.request_interrupt()
-                self._brain._interrupt.set()
-
-        monitor_thread = threading.Thread(
-            target=_barge_in_monitor, name="BargeInMonitor", daemon=True
-        )
-        trigger_thread = threading.Thread(
-            target=_barge_in_trigger, name="BargeInTrigger", daemon=True
-        )
-        monitor_thread.start()
-        trigger_thread.start()
-
-        try:
-            self._vo.speak_streamed(_sentences_with_expression())
-        finally:
-            # Stop the monitor — it will finish capturing and exit
-            monitor_stop.set()
-            self._vi._bargein_detected.set()  # unblock trigger thread
-            monitor_thread.join(timeout=2.0)
-            trigger_thread.join(timeout=1.0)
-
-        elapsed = time.monotonic() - response_start
-
-        if self._vo.was_interrupted:
+        if was_interrupted:
             logger.info("Response interrupted by user after %.1fs", elapsed)
-            self._gui.log("[PMC] …interrupted")
-            self._barge_in_occurred = True  # next listen() skips onset detection
+            self._gui.log("[PMC] ...interrupted")
+            self._barge_in_occurred = True
         else:
             logger.info("Response cycle completed in %.1fs", elapsed)
-            # Post-response cooldown: let environment settle before re-listening
-            # Prevents TTS echo / chair movement from triggering a new cycle
+            # Post-response cooldown: prevent TTS echo from triggering new cycle
             time.sleep(0.5)
 
         # Reset expression after speaking
@@ -432,24 +388,23 @@ class PMCOverwatch:
             self._gui.set_status("Transcribing...")
             self._gui.set_vis_mode("listening")
 
-            transcription = self._vi.transcribe(bargein_audio_path)
+            bargein_result = self._vi.transcribe(bargein_audio_path)
 
             # Clean up barge-in audio
             try:
-                import os as _os
-                if _os.path.exists(bargein_audio_path):
-                    _os.remove(bargein_audio_path)
+                if os.path.exists(bargein_audio_path):
+                    os.remove(bargein_audio_path)
             except OSError:
                 pass
 
-            if transcription and transcription.strip():
-                self._gui.log(f"[You] {transcription}")
-                logger.info("Barge-in transcription: %s", transcription)
-                # Process the barge-in input as a new interaction
-                self._process_interaction(text_prompt=transcription)
-                return
-            else:
-                self._gui.log("[Barge-in] Could not understand -- resuming listening.")
+            if bargein_result:
+                bargein_text, _ = bargein_result
+                if bargein_text and bargein_text.strip():
+                    self._gui.log(f"[You] {bargein_text}")
+                    logger.info("Barge-in transcription: %s", bargein_text)
+                    self._process_interaction(text_prompt=bargein_text)
+                    return
+            self._gui.log("[Barge-in] Could not understand -- resuming listening.")
 
         # Revert to listening or offline
         if self._running:

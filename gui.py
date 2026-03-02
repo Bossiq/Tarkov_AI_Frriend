@@ -295,7 +295,7 @@ class OverwatchGUI(ctk.CTk):
 
         self.shutdown_event = threading.Event()
         self._threads: list[threading.Thread] = []
-        self._toggle_cb = None; self._chat_cb = None; self._is_running = False; self._obs_mode = False
+        self._toggle_cb = None; self._chat_cb = None; self._mic_cb = None; self._is_running = False; self._obs_mode = False
         self._session_start = datetime.now()
         self._words_spoken = 0; self._responses = 0
         self._chat_log: list[str] = []
@@ -640,6 +640,7 @@ class OverwatchGUI(ctk.CTk):
     # ══ PUBLIC API ════════════════════════════════════════════════════
     def set_toggle_callback(self, cb): self._toggle_cb = cb
     def set_chat_callback(self, cb): self._chat_cb = cb
+    def set_mic_callback(self, cb): self._mic_cb = cb
     def register_thread(self, t): self._threads.append(t)
     def log(self, msg):
         ts = datetime.now().strftime("%H:%M:%S"); line = f"[{ts}]  {msg}"

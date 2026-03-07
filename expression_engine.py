@@ -35,6 +35,8 @@ class Emotion(str, Enum):
     CURIOUS    = "curious"
     CONFIDENT  = "confident"
     EMPATHETIC = "empathetic"
+    FOCUSED    = "focused"      # analyzing screen / deep concentration
+    ALARMED    = "alarmed"      # danger detected from screen capture
 
 
 # ═════════════════════════════════════════════════════════════════════
@@ -106,6 +108,18 @@ EXPRESSION_MAP = {
         "speak_sprites": ["speak_calm", "speak_calm", "speak_mid"],
         "priority": 3,
         "duration": 6.0,
+    },
+    Emotion.FOCUSED: {
+        "idle_sprite": "think",
+        "speak_sprites": ["speak_calm", "speak_calm", "speak_mid"],
+        "priority": 2,
+        "duration": 8.0,
+    },
+    Emotion.ALARMED: {
+        "idle_sprite": "surprise",
+        "speak_sprites": ["surprise", "speak_open", "speak_open"],
+        "priority": 6,
+        "duration": 4.0,
     },
 }
 

@@ -35,7 +35,13 @@ desktop.ini
 *.wav
 *.mp3
 latest_frame.jpg
+latest_screen.jpg
+pmc_overwatch_screen.jpg
 current_request.wav
+assets/sfx/
+
+# ── Test artifacts ────────────────────────────────────────────────────
+.pytest_cache/
 
 # ── AI / TTS model files (Phase 2+) ──────────────────────────────────
 models/

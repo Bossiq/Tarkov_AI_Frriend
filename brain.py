@@ -13,11 +13,13 @@ Features:
   * Sliding-window conversation memory
   * Retry logic with exponential backoff
   * Never returns comms error if any engine is reachable
+  * Screen vision analysis via Gemini Vision API
 """
 
 import logging
 import os
 import re
+import base64
 import threading
 import time
 from collections import deque
@@ -222,6 +224,10 @@ class Brain:
         available = [e for e in self._ENGINE_CHAIN if self._engines.get(e)]
         logger.info("Brain active: %s (%s) | engines: %s",
                      self._engine, self._model, " -> ".join(available))
+
+        # Vision state
+        self._last_vision_time: float = 0.0
+        self._last_vision_result: str = ""
 
     def _get_model_for_engine(self, engine: str) -> str:
         return {"groq": self._groq_model, "gemini": self._gemini_model,
@@ -471,6 +477,138 @@ class Brain:
         """Clear conversation history."""
         self._memory.clear()
         logger.info("Conversation memory cleared")
+
+    # ── Screen Vision Analysis ─────────────────────────────────────────
+    _VISION_PROMPT = (
+        "You are an AI co-host watching Escape from Tarkov gameplay live. "
+        "Look at this screenshot and give a SHORT, ENERGETIC reaction (1-2 sentences). "
+        "Focus on WHAT IS HAPPENING RIGHT NOW: combat, looting, injuries, map location, "
+        "inventory management, trader screens, or menu screens.\n\n"
+        "RULES:\n"
+        "- Be casual and hyped like a Twitch co-host.\n"
+        "- If nothing interesting is happening, say NOTHING (return empty).\n"
+        "- Never use markdown, lists, or formatting.\n"
+        "- Never say 'I can see' or 'screenshot shows'. Talk like you're watching live.\n"
+        "- If you see combat or danger, react with urgency!\n"
+        "- If it's a menu or loading screen, stay quiet (return empty).\n"
+    )
+
+    _VISION_COOLDOWN = 10.0  # seconds between vision requests
+
+    def __init_vision__(self) -> None:
+        """Initialize vision-related state (called from __init__)."""
+        self._last_vision_time: float = 0.0
+        self._last_vision_result: str = ""
+
+    def analyze_screen(self, frame_path: str) -> Optional[str]:
+        """Analyze a gameplay screenshot via Gemini Vision.
+
+        Returns a short reaction string, or None if:
+          - Gemini is not available
+          - Cooldown hasn't elapsed
+          - Nothing interesting was detected
+
+        Uses Gemini exclusively (only engine with vision support).
+        """
+        if not self._gemini_client:
+            return None
+
+        # Rate limit
+        now = time.monotonic()
+        if now - self._last_vision_time < self._VISION_COOLDOWN:
+            return None
+        self._last_vision_time = now
+
+        try:
+            # Read and encode the image
+            with open(frame_path, "rb") as f:
+                image_bytes = f.read()
+
+            image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+
+            # Send to Gemini Vision
+            response = self._gemini_client.models.generate_content(
+                model=self._gemini_model,
+                contents=[
+                    {
+                        "role": "user",
+                        "parts": [
+                            {"text": self._VISION_PROMPT},
+                            {
+                                "inline_data": {
+                                    "mime_type": "image/jpeg",
+                                    "data": image_b64,
+                                }
+                            },
+                        ],
+                    }
+                ],
+                config={"max_output_tokens": 100, "temperature": 0.7},
+            )
+
+            result = response.text.strip() if response.text else ""
+
+            # Filter out empty / non-interesting responses
+            if not result or len(result) < 5:
+                return None
+
+            self._last_vision_result = result
+            logger.info("Vision analysis: %s", result[:80])
+            return result
+
+        except Exception:
+            logger.debug("Vision analysis failed", exc_info=True)
+            return None
+
+    def get_screen_context(self, frame_path: Optional[str]) -> str:
+        """Get a brief screen context string to append to user prompts.
+
+        This gives the AI awareness of what's on screen during
+        normal voice interactions.
+        """
+        if not frame_path or not self._gemini_client:
+            return ""
+
+        try:
+            with open(frame_path, "rb") as f:
+                image_bytes = f.read()
+
+            image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+
+            response = self._gemini_client.models.generate_content(
+                model=self._gemini_model,
+                contents=[
+                    {
+                        "role": "user",
+                        "parts": [
+                            {
+                                "text": (
+                                    "Describe this Tarkov gameplay screenshot in "
+                                    "one brief sentence. Focus only on the key visible "
+                                    "game state (combat, inventory, map area, health). "
+                                    "If it's a menu or loading screen, say 'menu'.\n"
+                                )
+                            },
+                            {
+                                "inline_data": {
+                                    "mime_type": "image/jpeg",
+                                    "data": image_b64,
+                                }
+                            },
+                        ],
+                    }
+                ],
+                config={"max_output_tokens": 50, "temperature": 0.3},
+            )
+
+            ctx = response.text.strip() if response.text else ""
+            if ctx and ctx.lower() != "menu":
+                return f"\n[Screen context: {ctx}]"
+            return ""
+
+        except Exception:
+            logger.debug("Screen context failed", exc_info=True)
+            return ""
 
     # -- Streaming backends ----------------------------------------------------
     def _stream_tokens(self, messages: list[dict]) -> Generator[str, None, None]:

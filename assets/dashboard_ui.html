@@ -1,0 +1,546 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PMC Overwatch — Dashboard</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    :root {
+      --bg: #050810;
+      --card: #0d1117;
+      --surface: #161b22;
+      --glass: #1c2333;
+      --green: #3fb950;
+      --red: #f85149;
+      --amber: #d29922;
+      --cyan: #58a6ff;
+      --holo: #00f0ff;
+      --text: #f0f6fc;
+      --text2: #8b949e;
+      --muted: #30363d;
+      --border: #21262d;
+      --accent: #1f6feb;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Inter', system-ui, sans-serif;
+      line-height: 1.6;
+      min-height: 100vh;
+    }
+
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+
+    /* Header */
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 20px 28px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      margin-bottom: 20px;
+    }
+
+    .header h1 {
+      font-size: 22px;
+      font-weight: 700;
+      background: linear-gradient(135deg, var(--holo), var(--cyan));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .header .subtitle {
+      font-size: 12px;
+      color: var(--text2);
+      margin-top: 2px;
+    }
+
+    .status-badge {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 16px;
+      border-radius: 10px;
+      background: var(--surface);
+      font-size: 13px;
+      font-weight: 500;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--green);
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    /* Cards */
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 24px;
+      margin-bottom: 16px;
+      transition: border-color 0.2s;
+    }
+
+    .card:hover { border-color: var(--muted); }
+
+    .card-title {
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--holo);
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    /* Grid */
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    @media (max-width: 700px) { .grid { grid-template-columns: 1fr; } }
+
+    /* Form elements */
+    .field {
+      margin-bottom: 14px;
+    }
+
+    .field label {
+      display: block;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text2);
+      margin-bottom: 5px;
+    }
+
+    .field input, .field select {
+      width: 100%;
+      padding: 10px 14px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--glass);
+      color: var(--text);
+      font-family: 'Inter', sans-serif;
+      font-size: 13px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    .field input:focus, .field select:focus {
+      border-color: var(--accent);
+    }
+
+    .field input[type="range"] {
+      padding: 0;
+      background: transparent;
+      border: none;
+      accent-color: var(--holo);
+    }
+
+    /* Buttons */
+    .btn {
+      padding: 10px 20px;
+      border: none;
+      border-radius: 10px;
+      font-family: 'Inter', sans-serif;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      color: white;
+    }
+
+    .btn-primary:hover { background: #388bfd; }
+
+    .btn-danger {
+      background: var(--red);
+      color: white;
+    }
+
+    .btn-danger:hover { opacity: 0.85; }
+
+    .btn-outline {
+      background: transparent;
+      color: var(--text2);
+      border: 1px solid var(--border);
+    }
+
+    .btn-outline:hover {
+      border-color: var(--accent);
+      color: var(--text);
+    }
+
+    .btn-row {
+      display: flex;
+      gap: 10px;
+      margin-top: 16px;
+    }
+
+    /* Log viewer */
+    .log-viewer {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 14px;
+      font-family: 'Cascadia Code', 'Fira Code', monospace;
+      font-size: 11px;
+      color: var(--text2);
+      height: 220px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+      line-height: 1.7;
+    }
+
+    .log-viewer::-webkit-scrollbar { width: 6px; }
+    .log-viewer::-webkit-scrollbar-track { background: transparent; }
+    .log-viewer::-webkit-scrollbar-thumb { background: var(--muted); border-radius: 3px; }
+
+    /* Status grid */
+    .stat-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+      gap: 12px;
+    }
+
+    .stat-item {
+      background: var(--surface);
+      border-radius: 12px;
+      padding: 14px;
+      text-align: center;
+    }
+
+    .stat-value {
+      font-size: 20px;
+      font-weight: 700;
+      color: var(--holo);
+    }
+
+    .stat-label {
+      font-size: 11px;
+      color: var(--text2);
+      margin-top: 4px;
+    }
+
+    /* Toggle switch */
+    .toggle {
+      position: relative;
+      display: inline-block;
+      width: 44px;
+      height: 24px;
+    }
+
+    .toggle input { opacity: 0; width: 0; height: 0; }
+
+    .toggle .slider {
+      position: absolute;
+      inset: 0;
+      background: var(--muted);
+      border-radius: 12px;
+      transition: 0.3s;
+      cursor: pointer;
+    }
+
+    .toggle .slider::before {
+      content: '';
+      position: absolute;
+      width: 18px;
+      height: 18px;
+      left: 3px;
+      bottom: 3px;
+      background: white;
+      border-radius: 50%;
+      transition: 0.3s;
+    }
+
+    .toggle input:checked + .slider { background: var(--green); }
+    .toggle input:checked + .slider::before { transform: translateX(20px); }
+
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 0;
+    }
+
+    .toggle-label {
+      font-size: 13px;
+      color: var(--text);
+    }
+
+    /* Toast notification */
+    .toast {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      padding: 12px 20px;
+      border-radius: 10px;
+      font-size: 13px;
+      font-weight: 500;
+      z-index: 1000;
+      transform: translateX(120%);
+      transition: transform 0.3s ease;
+    }
+
+    .toast.show { transform: translateX(0); }
+    .toast.success { background: var(--green); color: white; }
+    .toast.error { background: var(--red); color: white; }
+
+    .footer {
+      text-align: center;
+      padding: 20px;
+      font-size: 11px;
+      color: var(--muted);
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <!-- Header -->
+    <div class="header">
+      <div>
+        <h1>⚡ PMC Overwatch</h1>
+        <div class="subtitle">AI Companion Dashboard</div>
+      </div>
+      <div class="status-badge" id="statusBadge">
+        <div class="status-dot" id="statusDot"></div>
+        <span id="statusText">Connecting...</span>
+      </div>
+    </div>
+
+    <!-- Status -->
+    <div class="card">
+      <div class="card-title">📊 System Status</div>
+      <div class="stat-grid">
+        <div class="stat-item"><div class="stat-value" id="uptime">--</div><div class="stat-label">Uptime</div></div>
+        <div class="stat-item"><div class="stat-value" id="engine">--</div><div class="stat-label">LLM Engine</div></div>
+        <div class="stat-item"><div class="stat-value" id="captures">--</div><div class="stat-label">Screen Frames</div></div>
+        <div class="stat-item"><div class="stat-value" id="responses">--</div><div class="stat-label">Responses</div></div>
+      </div>
+    </div>
+
+    <!-- Config -->
+    <div class="grid">
+      <!-- LLM -->
+      <div class="card">
+        <div class="card-title">🧠 LLM Brain</div>
+        <div class="field"><label>Groq API Key</label><input type="password" id="GROQ_API_KEY" placeholder="gsk_..."></div>
+        <div class="field"><label>Groq Model</label><input id="GROQ_MODEL" placeholder="llama-3.3-70b-versatile"></div>
+        <div class="field"><label>Gemini API Key</label><input type="password" id="GEMINI_API_KEY" placeholder="AIza..."></div>
+        <div class="field"><label>Gemini Model</label><input id="GEMINI_MODEL" placeholder="gemini-2.0-flash"></div>
+        <div class="field"><label>Ollama Model</label><input id="OLLAMA_MODEL" placeholder="qwen2.5:7b"></div>
+      </div>
+
+      <!-- Voice -->
+      <div class="card">
+        <div class="card-title">🎙️ Voice Settings</div>
+        <div class="field"><label>TTS Voice</label><input id="TTS_VOICE" placeholder="af_heart"></div>
+        <div class="field"><label>TTS Speed</label><input type="number" step="0.1" id="TTS_SPEED" placeholder="1.1"></div>
+        <div class="field"><label>Whisper Model</label>
+          <select id="WHISPER_MODEL">
+            <option value="tiny">tiny (fastest)</option>
+            <option value="base">base</option>
+            <option value="small" selected>small (recommended)</option>
+            <option value="medium">medium (accurate)</option>
+          </select>
+        </div>
+        <div class="field"><label>Input Mode</label>
+          <select id="INPUT_MODE">
+            <option value="auto">Auto VAD</option>
+            <option value="toggle">Toggle (F4)</option>
+            <option value="push">Push-to-talk (F4)</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Screen Capture -->
+      <div class="card">
+        <div class="card-title">📸 Screen Capture</div>
+        <div class="toggle-row"><span class="toggle-label">Enable Capture</span><label class="toggle"><input type="checkbox" id="SCREEN_CAPTURE" checked><span class="slider"></span></label></div>
+        <div class="toggle-row"><span class="toggle-label">AI Commentary</span><label class="toggle"><input type="checkbox" id="SCREEN_COMMENTARY" checked><span class="slider"></span></label></div>
+        <div class="field"><label>Monitor</label><input type="number" id="SCREEN_MONITOR" value="1" min="0" max="4"></div>
+        <div class="field"><label>Capture FPS</label><input type="number" step="0.1" id="SCREEN_FPS" value="1.0" min="0.1" max="5.0"></div>
+        <div class="field"><label>Commentary Interval (sec)</label><input type="number" id="SCREEN_COMMENTARY_INTERVAL" value="30" min="10" max="120"></div>
+      </div>
+
+      <!-- Sound Effects & Twitch -->
+      <div class="card">
+        <div class="card-title">🔊 Sound & Twitch</div>
+        <div class="toggle-row"><span class="toggle-label">Sound Effects</span><label class="toggle"><input type="checkbox" id="SFX_ENABLED" checked><span class="slider"></span></label></div>
+        <div class="field"><label>SFX Volume</label><input type="range" id="SFX_VOLUME" min="0" max="1" step="0.1" value="0.5"></div>
+        <div class="field"><label>Twitch Token</label><input type="password" id="TWITCH_TOKEN" placeholder="oauth:..."></div>
+        <div class="field"><label>Twitch Channel</label><input id="TWITCH_INITIAL_CHANNELS" placeholder="bossiq420"></div>
+      </div>
+    </div>
+
+    <!-- Actions -->
+    <div class="btn-row">
+      <button class="btn btn-primary" onclick="saveConfig()">💾 Save Config</button>
+      <button class="btn btn-danger" onclick="clearMemory()">🧹 Clear AI Memory</button>
+      <button class="btn btn-outline" onclick="refreshAll()">🔄 Refresh</button>
+    </div>
+
+    <!-- Logs -->
+    <div class="card" style="margin-top: 16px;">
+      <div class="card-title">📋 Activity Log</div>
+      <div class="log-viewer" id="logViewer">Connecting to PMC Overwatch...</div>
+    </div>
+
+    <div class="footer">PMC Overwatch v0.30.0 — Dashboard on localhost:8420</div>
+  </div>
+
+  <!-- Toast -->
+  <div class="toast" id="toast"></div>
+
+  <script>
+    const API = '';
+
+    // Field IDs that map to .env keys
+    const CONFIG_FIELDS = [
+      'GROQ_API_KEY', 'GROQ_MODEL', 'GEMINI_API_KEY', 'GEMINI_MODEL',
+      'OLLAMA_MODEL', 'TTS_VOICE', 'TTS_SPEED', 'WHISPER_MODEL',
+      'INPUT_MODE', 'SCREEN_CAPTURE', 'SCREEN_COMMENTARY',
+      'SCREEN_MONITOR', 'SCREEN_FPS', 'SCREEN_COMMENTARY_INTERVAL',
+      'SFX_ENABLED', 'SFX_VOLUME', 'TWITCH_TOKEN', 'TWITCH_INITIAL_CHANNELS'
+    ];
+
+    const TOGGLE_FIELDS = ['SCREEN_CAPTURE', 'SCREEN_COMMENTARY', 'SFX_ENABLED'];
+
+    function showToast(msg, type = 'success') {
+      const t = document.getElementById('toast');
+      t.textContent = msg;
+      t.className = `toast ${type} show`;
+      setTimeout(() => t.classList.remove('show'), 3000);
+    }
+
+    async function loadConfig() {
+      try {
+        const res = await fetch(`${API}/api/config`);
+        const data = await res.json();
+
+        CONFIG_FIELDS.forEach(key => {
+          const el = document.getElementById(key);
+          if (!el) return;
+          const val = data[key] || '';
+
+          if (TOGGLE_FIELDS.includes(key)) {
+            el.checked = val.toLowerCase() === 'true' || val === '1';
+          } else if (el.type === 'range' || el.type === 'number') {
+            el.value = val;
+          } else {
+            el.value = val;
+          }
+        });
+      } catch (e) {
+        console.error('Config load failed:', e);
+      }
+    }
+
+    async function saveConfig() {
+      const updates = {};
+      CONFIG_FIELDS.forEach(key => {
+        const el = document.getElementById(key);
+        if (!el) return;
+
+        let val;
+        if (TOGGLE_FIELDS.includes(key)) {
+          val = el.checked ? 'true' : 'false';
+        } else {
+          val = el.value;
+        }
+
+        // Skip masked API keys
+        if (val.includes('***')) return;
+        updates[key] = val;
+      });
+
+      try {
+        const res = await fetch(`${API}/api/config`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(updates)
+        });
+        const data = await res.json();
+        showToast(`Saved ${data.updated.length} settings ✓`);
+      } catch (e) {
+        showToast('Save failed', 'error');
+      }
+    }
+
+    async function clearMemory() {
+      try {
+        const res = await fetch(`${API}/api/clear-memory`, { method: 'POST' });
+        const data = await res.json();
+        showToast(data.message || 'Memory cleared ✓');
+      } catch (e) {
+        showToast('Failed to clear memory', 'error');
+      }
+    }
+
+    async function loadStatus() {
+      try {
+        const res = await fetch(`${API}/api/status`);
+        const data = await res.json();
+
+        document.getElementById('uptime').textContent = data.uptime_human || '--';
+        document.getElementById('engine').textContent = data.engine || '--';
+        document.getElementById('captures').textContent = data.screen_frames || '0';
+        document.getElementById('responses').textContent = data.responses || '0';
+
+        document.getElementById('statusDot').style.background = data.running ? 'var(--green)' : 'var(--amber)';
+        document.getElementById('statusText').textContent = data.running ? 'Active' : 'Standby';
+      } catch (e) {
+        document.getElementById('statusDot').style.background = 'var(--red)';
+        document.getElementById('statusText').textContent = 'Disconnected';
+      }
+    }
+
+    async function loadLogs() {
+      try {
+        const res = await fetch(`${API}/api/logs`);
+        const data = await res.json();
+        const viewer = document.getElementById('logViewer');
+        if (data.logs && data.logs.length > 0) {
+          viewer.textContent = data.logs.join('\n');
+          viewer.scrollTop = viewer.scrollHeight;
+        }
+      } catch (e) { /* ignore */ }
+    }
+
+    function refreshAll() {
+      loadConfig();
+      loadStatus();
+      loadLogs();
+      showToast('Refreshed ✓');
+    }
+
+    // Initial load
+    loadConfig();
+    loadStatus();
+    loadLogs();
+
+    // Auto-refresh status and logs every 5s
+    setInterval(loadStatus, 5000);
+    setInterval(loadLogs, 5000);
+  </script>
+</body>
+</html>

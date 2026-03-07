@@ -17,3 +17,6 @@ customtkinter
 Pillow
 edge-tts
 google-genai
+mss
+fastapi
+uvicorn

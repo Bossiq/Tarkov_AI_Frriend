@@ -109,9 +109,12 @@
           const q = eulerToQuat(kf.x || 0, kf.y || 0, kf.z || 0);
           values.push(q.x, q.y, q.z, q.w);
         }
+        // Head/spine: use LINEAR to prevent wild catmull-rom overshoot
+        // Other bones: use SMOOTH for natural arcs
+        const isHead = boneName === 'head' || boneName === 'neck' || boneName === 'spine';
         tracks.push(new THREE.QuaternionKeyframeTrack(
           `${node.name}.quaternion`, times, values,
-          THREE.InterpolateSmooth,  // smooth catmull-rom interpolation!
+          isHead ? THREE.InterpolateLinear : THREE.InterpolateSmooth,
         ));
       }
       return new THREE.AnimationClip(name, duration, tracks);
@@ -414,11 +417,11 @@
 
     const scene = new THREE.Scene();
     scene.background = null;
-    const camera = new THREE.PerspectiveCamera(30, window.innerWidth / window.innerHeight, 0.1, 50);
+    const camera = new THREE.PerspectiveCamera(35, window.innerWidth / window.innerHeight, 0.1, 50);
     const params = new URLSearchParams(window.location.search);
     const framing = params.get('framing') || 'bust';
     if (framing === 'full') { camera.position.set(0, 1.0, 3.0); camera.lookAt(0, 0.9, 0); }
-    else { camera.position.set(0, 1.35, 1.6); camera.lookAt(0, 1.3, 0); }
+    else { camera.position.set(0, 1.3, 1.8); camera.lookAt(0, 1.25, 0); }  // wider for hand visibility
 
     scene.add(new THREE.AmbientLight(0xffffff, 1.5));
     scene.add(new THREE.HemisphereLight(0xddeeff, 0x445566, 1.0));
@@ -572,15 +575,15 @@
         else { setExpression('blink', 0); blinking = false; blinkTimer = 0; nextBlink = 2 + Math.random() * 4; }
       }
 
-      // Gaze
+      // Gaze (very subtle — only during idle, NOT during gestures)
       gazeTimer += dt;
       if (gazeTimer >= nextGazeShift) {
-        gazeTargetX = (Math.random() - 0.5) * 0.06;
-        gazeTargetZ = (Math.random() - 0.5) * 0.03;
-        gazeTimer = 0; nextGazeShift = 1.5 + Math.random() * 3;
+        gazeTargetX = (Math.random() - 0.5) * 0.02;  // very subtle
+        gazeTargetZ = (Math.random() - 0.5) * 0.01;
+        gazeTimer = 0; nextGazeShift = 3 + Math.random() * 4;
       }
-      gazeCurrentX += (gazeTargetX - gazeCurrentX) * Math.min(dt * 3, 1);
-      gazeCurrentZ += (gazeTargetZ - gazeCurrentZ) * Math.min(dt * 3, 1);
+      gazeCurrentX += (gazeTargetX - gazeCurrentX) * Math.min(dt * 2, 1);
+      gazeCurrentZ += (gazeTargetZ - gazeCurrentZ) * Math.min(dt * 2, 1);
 
       // Mouth
       mouthCurrent += (mouthTarget - mouthCurrent) * Math.min(dt * 12, 1);
@@ -602,15 +605,14 @@
       vrm.update(dt);
       if (mixer) mixer.update(dt);
 
-      // Head gaze additive (on top of animation)
-      if (vrm.humanoid) {
+      // Tiny speaking nod (only during speech, NO gaze stacking on gestures)
+      if (vrm.humanoid && currentMode === 'speaking') {
         const head = vrm.humanoid.getNormalizedBoneNode('head');
         if (head) {
-          const gq = new THREE.Quaternion().setFromEuler(new THREE.Euler(
-            gazeCurrentZ + (currentMode === 'speaking' ? Math.sin(t * 2.5) * 0.015 * mouthCurrent : 0),
-            0, gazeCurrentX,
+          const nod = new THREE.Quaternion().setFromEuler(new THREE.Euler(
+            Math.sin(t * 2.5) * 0.008 * mouthCurrent, 0, 0,
           ));
-          head.quaternion.multiply(gq);
+          head.quaternion.multiply(nod);
         }
       }
 

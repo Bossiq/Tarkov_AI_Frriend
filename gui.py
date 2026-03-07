@@ -290,7 +290,11 @@ class OverwatchGUI(ctk.CTk):
         super().__init__()
         ctk.set_appearance_mode("dark")
         self.title("PMC Overwatch")
-        self.geometry("460x820"); self.minsize(420, 740)
+        # Smaller window when 3D avatar handles visuals (no sprite canvas)
+        if os.getenv("AVATAR_3D", "false").lower() in ("true", "1"):
+            self.geometry("460x480"); self.minsize(420, 400)
+        else:
+            self.geometry("460x820"); self.minsize(420, 740)
         self.configure(fg_color=_BG); self.resizable(True, True)
 
         self.shutdown_event = threading.Event()
@@ -303,6 +307,7 @@ class OverwatchGUI(ctk.CTk):
         self._mode = "idle"; self._time = 0.0
         self._photo = None
         self._expression_engine = None  # set after _engine is built
+        self._avatar_3d = None  # set via set_avatar_3d() for mode forwarding
 
         sz = min(_CANVAS_W - 40, _CANVAS_H - 60)
         self._engine = _AliveEngine(sz)
@@ -360,10 +365,16 @@ class OverwatchGUI(ctk.CTk):
 
     def _build_agent(self):
         self._cv = tk.Canvas(self, bg=_BG, highlightthickness=0, bd=0)
-        self._cv.pack(fill="both", expand=True, pady=(8, 0))
         self._av_st = ctk.CTkLabel(self, text="◆ OFFLINE",
             font=ctk.CTkFont(size=13, weight="bold"), text_color=_MUTED)
-        self._av_st.pack(pady=(2, 4))
+
+        # Hide 2D sprite area when 3D avatar is active (runs in separate window)
+        if os.getenv("AVATAR_3D", "false").lower() in ("true", "1"):
+            # Don't show sprite canvas — 3D avatar window handles visuals
+            self._av_st.pack(pady=(2, 4))
+        else:
+            self._cv.pack(fill="both", expand=True, pady=(8, 0))
+            self._av_st.pack(pady=(2, 4))
 
     def _init_canvas_items(self):
         """Create all persistent canvas items once (called on first render)."""
@@ -392,6 +403,9 @@ class OverwatchGUI(ctk.CTk):
         self._canvas_ready = True
 
     def _render(self):
+        # Skip 2D rendering if canvas is hidden (3D avatar mode)
+        if not self._cv.winfo_ismapped():
+            return
         if not self._canvas_ready:
             self._init_canvas_items()
         cv = self._cv
@@ -641,6 +655,7 @@ class OverwatchGUI(ctk.CTk):
     def set_toggle_callback(self, cb): self._toggle_cb = cb
     def set_chat_callback(self, cb): self._chat_cb = cb
     def set_mic_callback(self, cb): self._mic_cb = cb
+    def set_avatar_3d(self, avatar): self._avatar_3d = avatar
     def register_thread(self, t): self._threads.append(t)
     def log(self, msg):
         ts = datetime.now().strftime("%H:%M:%S"); line = f"[{ts}]  {msg}"
@@ -669,6 +684,9 @@ class OverwatchGUI(ctk.CTk):
                "thinking": ("◆ THINKING", _AMBER), "speaking": ("◆ SPEAKING", _HOLO)}
         t, c = lbl.get(m, ("◆ OFFLINE", _MUTED))
         self._av_st.configure(text=t, text_color=c)
+        # Forward mode to 3D avatar
+        if self._avatar_3d:
+            self._avatar_3d.set_mode(m)
     def _do_emo(self, e): self._emotion = e; self._et = 0.0
     def _do_status(self, text):
         self._st_lbl.configure(text=text); lo = text.lower()

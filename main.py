@@ -22,6 +22,7 @@ runs on daemon threads.
 import asyncio
 import logging
 import os
+import re
 import signal
 import threading
 import time
@@ -43,6 +44,7 @@ from twitch_bot import TwitchBot  # noqa: E402
 from video_capture import ScreenCapture  # noqa: E402
 from voice_input import VoiceInput  # noqa: E402
 from voice_output import VoiceOutput  # noqa: E402
+from avatar_3d import Avatar3D  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +64,10 @@ class PMCOverwatch:
         self._ptt_key = os.getenv("PTT_KEY", "f4").lower()
         self._ptt_active = threading.Event()
         self._ptt_toggle_on = False
+
+        # ── Concurrency guards ────────────────────────────────────────
+        self._processing_lock = threading.Lock()   # prevent parallel interactions
+        self._listen_active = False                 # prevent duplicate listen threads
 
         # ── Shared barge-in interrupt event ───────────────────────────
         self._interrupt_event = threading.Event()
@@ -87,13 +93,18 @@ class PMCOverwatch:
             self._sfx = None
             logger.info("SFX module not available")
 
+        # ── 3D Avatar (optional) ───────────────────────────────────────
+        self._avatar_3d: Optional[Avatar3D] = None
+        if os.getenv("AVATAR_3D", "false").lower() in ("true", "1"):
+            self._avatar_3d = Avatar3D()
+
         # ── Components ─────────────────────────────────────────────────
         self._vi = VoiceInput(shutdown_event=self._shutdown, gui_log=self._gui.log)
         self._vo = VoiceOutput(
             gui_callback=self._gui.log,
-            on_speak_start=lambda: self._gui.set_vis_mode("speaking"),
-            on_speak_end=lambda: self._gui.set_vis_mode("thinking"),
-            on_amplitude=lambda a: self._gui.set_amplitude(a),
+            on_speak_start=lambda: self._on_speak_start(),
+            on_speak_end=lambda: self._on_speak_end(),
+            on_amplitude=lambda a: self._on_amplitude(a),
             interrupt_event=self._interrupt_event,
         )
 
@@ -147,7 +158,32 @@ class PMCOverwatch:
             self._gui.log("[SFX] Sound effects active")
             self._sfx.play("startup")
 
+        # Start 3D avatar if configured
+        if self._avatar_3d:
+            if self._avatar_3d.start():
+                self._gui.log("[Avatar] 3D holographic avatar active")
+                self._gui.set_avatar_3d(self._avatar_3d)
+            else:
+                self._gui.log("[Avatar] 3D avatar unavailable — using sprites")
+                self._avatar_3d = None
+
         self._gui.log("System ready. Click Start to begin.")
+
+    # ── Avatar/GUI callbacks (route to both 2D + 3D) ────────────────
+    def _on_speak_start(self) -> None:
+        self._gui.set_vis_mode("speaking")
+        if self._avatar_3d:
+            self._avatar_3d.set_mode("speaking")
+
+    def _on_speak_end(self) -> None:
+        self._gui.set_vis_mode("thinking")
+        if self._avatar_3d:
+            self._avatar_3d.set_mode("thinking")
+
+    def _on_amplitude(self, amp: float) -> None:
+        self._gui.set_amplitude(amp)
+        if self._avatar_3d:
+            self._avatar_3d.set_mouth(amp)
 
     # ── Twitch ────────────────────────────────────────────────────────
     def setup_twitch(self) -> bool:
@@ -193,6 +229,12 @@ class PMCOverwatch:
                 self._running = False
                 return
 
+            # Guard against duplicate listening threads
+            if self._listen_active:
+                logger.warning("Listen thread already active — ignoring toggle")
+                return
+            self._listen_active = True
+
             # Start the listening thread
             t = threading.Thread(
                 target=self._listening_thread, name="ListenThread", daemon=True
@@ -213,6 +255,8 @@ class PMCOverwatch:
             # Start keyboard listener for toggle/push modes
             if self._input_mode in ("toggle", "push"):
                 self._start_keyboard_listener()
+        else:
+            self._listen_active = False
 
     # ── Keyboard listener (push-to-talk) ─────────────────────────────
     def _start_keyboard_listener(self) -> None:
@@ -308,6 +352,7 @@ class PMCOverwatch:
             if self._shutdown.wait(timeout=0.1):
                 break
 
+        self._listen_active = False
         self._gui.log("[Mic] Listening stopped.")
         self._gui.set_status("Offline")
         logger.info("Listening thread stopped")
@@ -378,6 +423,27 @@ class PMCOverwatch:
         if self._brain is None:
             return
 
+        # Prevent concurrent interactions (causes TTS event loop crash)
+        if not self._processing_lock.acquire(blocking=False):
+            logger.warning("Already processing an interaction — skipping")
+            return
+        try:
+            self._process_interaction_inner(
+                text_prompt=text_prompt, use_audio=use_audio, use_video=use_video
+            )
+        finally:
+            self._processing_lock.release()
+
+    def _process_interaction_inner(
+        self,
+        text_prompt: Optional[str] = None,
+        use_audio: bool = False,
+        use_video: bool = False,
+    ) -> None:
+        """Actual interaction logic, called under _processing_lock."""
+        if self._brain is None:
+            return
+
         # ── Audio capture + transcription ─────────────────────────────
         if use_audio:
             try:
@@ -418,6 +484,9 @@ class PMCOverwatch:
                 self._gui.log(f"[You] ({lang_label}) {transcription}")
                 text_prompt = transcription
 
+                # Pass detected language to TTS so voice matches user's language
+                self._vo.set_language_hint(detected_lang or "en")
+
             except Exception:
                 logger.exception("Audio capture/transcription error")
                 self._gui.log("[!] Audio capture failed")
@@ -450,14 +519,32 @@ class PMCOverwatch:
         if self._sfx:
             self._sfx.play("respond")
 
-        # Stream sentences with expression detection
+        # Stream sentences with expression detection + gesture parsing
         sentences = self._brain.stream_sentences(text_prompt)
+        _GESTURE_RE = re.compile(r'\[gesture:(\w+)\]', re.IGNORECASE)
+        gesture_fired = False  # only one gesture per response
 
         def _sentences_with_expression():
+            nonlocal gesture_fired
             for sentence in sentences:
                 expression = detect_expression(sentence)
                 self._gui.set_expression(expression)
-                yield sentence
+                # Forward expression to 3D avatar
+                if self._avatar_3d:
+                    self._avatar_3d.set_emotion(expression.value)
+
+                # Parse and trigger gesture tags
+                gesture_match = _GESTURE_RE.search(sentence)
+                if gesture_match and not gesture_fired and self._avatar_3d:
+                    gesture_name = gesture_match.group(1)
+                    self._avatar_3d.set_gesture(gesture_name)
+                    gesture_fired = True
+                    logger.info("Gesture triggered: %s", gesture_name)
+
+                # Strip gesture tags from spoken text
+                clean = _GESTURE_RE.sub('', sentence).strip()
+                if clean:
+                    yield clean
 
         try:
             self._vo.speak_streamed(_sentences_with_expression())
@@ -479,10 +566,12 @@ class PMCOverwatch:
         else:
             logger.info("Response cycle completed in %.1fs", elapsed)
             # Post-response cooldown: prevent TTS echo from triggering new cycle
-            time.sleep(0.5)
+            time.sleep(1.0)
 
         # Reset expression after speaking
         self._gui.reset_expression()
+        if self._avatar_3d:
+            self._avatar_3d.set_emotion("neutral")
 
         # ── Handle barge-in: transcribe + process immediately ──────
         if was_interrupted and bargein_audio_path:

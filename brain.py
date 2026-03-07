@@ -45,9 +45,10 @@ _MAX_RETRIES = 5
 _RETRY_BASE_DELAY = 1.0
 _COMPRESS_THRESHOLD = 8  # compress when memory exceeds this many messages
 
-from tarkov_data import QUEST_REFERENCE  # noqa: E402
+from tarkov_data import QUEST_REFERENCE, TWITCH_REFERENCE  # noqa: E402
+from tarkov_updater import get_live_data  # noqa: E402
 from expression_engine import (  # noqa: E402
-    detect_expression, Emotion, LLM_EXPRESSION_PROMPT,
+    detect_expression, Emotion, LLM_EXPRESSION_PROMPT, LLM_GESTURE_PROMPT,
 )
 
 _SYSTEM_CORE = (
@@ -77,18 +78,47 @@ _SYSTEM_CORE = (
     "- If user writes in Romanian → reply fully in Romanian.\n"
     "- ALWAYS finish your complete thought. Never stop mid-sentence.\n\n"
     + LLM_EXPRESSION_PROMPT
+    + LLM_GESTURE_PROMPT
 )
 
 # Quest keywords that trigger quest data injection
 _QUEST_KEYWORDS = re.compile(
     r'\b(quest|task|mission|trader|prapor|therapist|skier|peacekeeper|'
-    r'mechanic|ragman|jaeger|fence|lightkeeper|shooter.born|gunsmith|'
-    r'delivery.from.the.past|setup|друг|квест|задан|торговец|прапор)\b',
+    r'mechanic|ragman|jaeger|fence|lightkeeper|ref|btr|btr.driver|'
+    r'shooter.born|gunsmith|delivery.from.the.past|setup|'
+    r'theta.container|arena|burning.rubber|easy.money|'
+    r'друг|квест|задан|торговец|прапор)\b',
+    re.IGNORECASE
+)
+
+# Twitch/stream keywords that inject Twitch context
+_TWITCH_KEYWORDS = re.compile(
+    r'\b(twitch|stream|chat|viewer|sub|subscriber|raid|'
+    r'donation|dono|bits|emote|clip|vod|drops|'
+    r'streamer|pestily|lvndmark|shroud|content|'
+    r'стрим|чат|зритель)\b',
+    re.IGNORECASE
+)
+
+# Meta/patch keywords that trigger live data injection
+_META_KEYWORDS = re.compile(
+    r'\b(meta|patch|update|nerf|buff|wipe|season|ammo|tier|'
+    r'best.ammo|best.gun|best.armor|spawn.rate|boss.spawn|'
+    r'flea|market|price|attachment|suppressor|muzzle|recoil|'
+    r'мета|патч|обновлени|вайп|сезон)\b',
     re.IGNORECASE
 )
 
 # Regex to split accumulated text into complete sentences
 _SENTENCE_END = re.compile(r'(?<=[.!?])\s+')
+
+# Natural clause boundaries — only split at commas followed by these words.
+# This prevents splitting at list commas or mid-phrase commas.
+_CLAUSE_BREAK = re.compile(
+    r',\s+(?=(?:and|but|so|because|since|which|while|although|however|'
+    r'then|or|yet|where|when|if|though)\b)',
+    re.IGNORECASE
+)
 
 
 # Legacy wrapper — kept for backward compatibility
@@ -229,6 +259,24 @@ class Brain:
         self._last_vision_time: float = 0.0
         self._last_vision_result: str = ""
 
+        # Pre-fetch live Tarkov data on startup (non-blocking cache)
+        self._live_data: str = ""
+        try:
+            self._live_data = get_live_data()
+            if self._live_data:
+                logger.info("Live Tarkov data loaded (%d chars)", len(self._live_data))
+        except Exception:
+            logger.debug("Live data fetch skipped at init")
+
+    def _get_live_tarkov_data(self) -> str:
+        """Get live Tarkov data, using cached value if available."""
+        if not self._live_data:
+            try:
+                self._live_data = get_live_data()
+            except Exception:
+                pass
+        return self._live_data
+
     def _get_model_for_engine(self, engine: str) -> str:
         return {"groq": self._groq_model, "gemini": self._gemini_model,
                 "ollama": self._ollama_model}.get(engine, "")
@@ -351,8 +399,21 @@ class Brain:
         self._maybe_compress_memory()
 
         system = _SYSTEM_CORE
+
+        # Inject quest reference when quest-related topics detected
         if _QUEST_KEYWORDS.search(user_prompt):
             system += "\n\nUSE THIS REFERENCE for accurate Tarkov info:\n" + QUEST_REFERENCE
+
+        # Inject Twitch context when streaming topics detected
+        if _TWITCH_KEYWORDS.search(user_prompt):
+            system += "\n" + TWITCH_REFERENCE
+
+        # Inject live data when meta/patch/ammo topics detected
+        if _META_KEYWORDS.search(user_prompt) or _QUEST_KEYWORDS.search(user_prompt):
+            live = self._get_live_tarkov_data()
+            if live:
+                system += "\n\nLIVE DATA (auto-updated from tarkov.dev):\n" + live
+
         messages = [{"role": "system", "content": system}]
         messages.extend(self._memory)
         messages.append({"role": "user", "content": user_prompt})
@@ -423,15 +484,19 @@ class Brain:
                                 full_response += sentence + " "
                                 yield sentence
                         buffer = parts[-1]
-                    elif len(buffer.split()) >= 14:
-                        comma_idx = buffer.rfind(",")
-                        if comma_idx > 10:
-                            flush = buffer[:comma_idx + 1].strip()
-                            buffer = buffer[comma_idx + 1:]
+                    elif len(buffer.split()) >= 25:
+                        # Only split at natural clause boundaries
+                        # (comma + conjunction/clause word).
+                        m = _CLAUSE_BREAK.search(buffer)
+                        if m and m.start() > 15:
+                            # Split at the clause break (keep comma with first part)
+                            flush = buffer[:m.start() + 1].strip()
+                            buffer = buffer[m.end():]
                         else:
+                            # No good break point — flush the whole buffer
                             flush = buffer.strip()
                             buffer = ""
-                        if flush:
+                        if flush and len(flush.split()) >= 6:
                             full_response += flush + " "
                             yield flush
 

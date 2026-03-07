@@ -447,6 +447,26 @@ class VoiceInput:
             end = min(len(audio), end + tail_pad)
             audio = audio[:end]
 
+        # ── Noise reduction (spectral gating) ─────────────────────────
+        try:
+            import noisereduce as nr
+            # Use first 0.5s as noise profile (captured during onset detection)
+            noise_len = min(int(0.5 * self.samplerate), len(audio) // 4)
+            noise_clip = audio[:noise_len]
+            audio = nr.reduce_noise(
+                y=audio.flatten(),
+                sr=self.samplerate,
+                y_noise=noise_clip.flatten(),
+                prop_decrease=0.75,   # reduce noise by 75% (keep some naturalness)
+                stationary=True,      # good for constant background noise
+            )
+            audio = audio.reshape(-1, 1)  # restore shape for soundfile
+            logger.debug("Noise reduction applied (profile=%.1fs)", noise_len / self.samplerate)
+        except ImportError:
+            pass  # noisereduce not installed — skip
+        except Exception:
+            logger.debug("Noise reduction failed — using raw audio", exc_info=True)
+
         sf.write(output_filename, audio, self.samplerate)
         duration = len(audio) / self.samplerate
         logger.info("Recorded %.1fs → %s", duration, output_filename)

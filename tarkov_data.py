@@ -1,9 +1,12 @@
 """
 Tarkov quest and game knowledge — injected into LLM context.
 
-Comprehensive reference for quests, maps, ammo, bosses, and mechanics
-from the 1.0 release (November 2025). This data is injected directly
-into the system prompt so the AI can answer specific questions accurately.
+Comprehensive reference for quests, maps, ammo, bosses, mechanics,
+events, meta, and Twitch streaming context from the 1.0 release
+(November 2025) through Patch 1.0.2.5 (March 2026).
+
+This data is injected directly into the system prompt so the AI
+can answer specific questions accurately.
 """
 
 QUEST_REFERENCE = '''
@@ -75,6 +78,7 @@ Rigged Game: Place markers at medical containers on Shoreline
 Resort Part 1-3: Shoreline Resort quests involving keys and items
 No Offence: Kill PMCs on Interchange with specific gear
 Long Road: Multi-map exploration quest
+Easy Money Part 1: Prerequisite for unlocking Ref trader — requires completing Burning Rubber questline
 
 === PEACEKEEPER QUESTS ===
 Fishing Gear: Find message at Shoreline pier
@@ -82,13 +86,7 @@ Tigr Safari: Locate Russian Tigr LAVs on Shoreline
 Scrap Metal: Find heavy machinery on Shoreline
 Eagle Eye: Find NATO recon drones
 Humanitarian Supplies: Secure and deliver supplies
-Spa Tour Part 1: Find 3 morphine injectors on Shoreline
-Spa Tour Part 2: Find 3 cans of thermite on Shoreline
-Spa Tour Part 3: Find 3 alkali bottles on Shoreline
-Spa Tour Part 4: Find 3 propane tanks on Shoreline
-Spa Tour Part 5: Kill 14 Scavs on Shoreline resort
-Spa Tour Part 6: Find 2 water hoses on Shoreline
-Spa Tour Part 7: Kill 14 Scavs in resort at night
+Spa Tour Part 1-7: Series on Shoreline — find morphine, thermite, alkali, propane, water hoses; kill Scavs in resort
 Cargo X Part 1-4: Investigate TerraGroup cargo
 Wet Job Part 1-6: Kill Scavs/PMCs with suppressed weapons across maps
 Mentor: Reach high reputation with multiple traders
@@ -116,10 +114,7 @@ Energy Crisis: Fix generators on Interchange
 Only Business: Reach level 15 and buy/sell 1M roubles with Ragman
 Make ULTRA Great Again: Kill 30 Scavs on Interchange
 Big Sale: Place markers at stores on Interchange (Ten, Dino Clothes, Top Brand)
-Sew It Good Part 1: Find and hand over Shmaska masks + Pilgrim backpacks
-Sew It Good Part 2: Find and hand over Blackrock rigs
-Sew It Good Part 3: Find and hand over Wartech gear rigs
-Sew It Good Part 4: Find and hand over Gzhel armor
+Sew It Good Part 1-4: Find and hand over masks, Pilgrim backpacks, Blackrock rigs, Wartech gear, Gzhel armor
 Dressed to Kill: Find Yanka hats and cowboy hats or hand over dogtags
 Database Part 1-2: Obtain cargo manifests from OLI/IDEA/Goshan on Interchange
 The Key to Success: Retrieve 2 books from Interchange
@@ -145,14 +140,7 @@ The Survivalist Path - Junkie: Kill Scavs while under stim effects
 The Survivalist Path - Eagle-Owl: Kill Scavs at night without NVGs
 The Survivalist Path - Combat Medic: Heal certain HP while in raid
 
-Tarkov Shooter Part 1: Kill 3 Scavs on Woods with bolt-action from 40+ meters
-Tarkov Shooter Part 2: Kill 3 Scavs on Woods with bolt-action headshots
-Tarkov Shooter Part 3: Kill 3 PMCs on Woods with bolt-action
-Tarkov Shooter Part 4: Kill 3 PMCs on Woods with bolt-action from 40+ meters
-Tarkov Shooter Part 5: Kill 3 Scavs on Reserve with bolt-action
-Tarkov Shooter Part 6: Kill 2 PMCs in same raid on Reserve with bolt-action
-Tarkov Shooter Part 7: Kill 3 PMCs on any map with bolt-action (no scope)
-Tarkov Shooter Part 8: Kill 3 PMCs with headshots on Woods using bolt-action
+Tarkov Shooter Part 1-8: Bolt-action rifle kill challenges across Woods and Reserve (headshots, distance, multi-kills)
 
 The Huntsman Path - Secured Perimeter: Kill Scavs on Woods near lumber
 The Huntsman Path - Forest Cleaning: Kill Scavs on Woods
@@ -171,16 +159,33 @@ Hunting Trip: Kill specific animals on Woods
 Insomnia: Kill PMCs at night
 Dragnet: Find chemical container on Factory
 
-=== REF (NEW TRADER - 1.0) ===
-PvP and Arena focused trader
-Offers quests rewarding exclusive items including the Theta container
-Tactical challenges across multiple maps
-Focus on player-vs-player combat skills
+=== REF (THE HOST) — NEW TRADER IN 1.0 ===
+Access: Unlock by completing Skier's "Easy Money Part 1" (requires finishing Burning Rubber questline)
+Currency: Uses GP Coins as primary currency
+Specialty: Rare weapons, ammunition, and modifications
+7 quests available in the main game (reach loyalty level 2 without Arena)
+Arena Bridge: After completing "To Great Heights! Part 3" — transfer items between Arena and main game
+Offers the Theta container as a quest reward (exclusive)
+PvP-focused tactical challenges across multiple maps
+Loyalty: Level up character + trade with Ref + complete his quests
 
-=== BTR DRIVER (NEW TRADER - 1.0) ===
-15 quests involving BTR (armored personnel carrier)
-Exploration, logistics, and dynamic firefights
-Boosting BTR reputation unlocks special gear and travel options
+=== BTR DRIVER — IN-RAID TRADER (NEW IN 1.0) ===
+Access: Accept "A Helping Hand" from Mechanic to unlock BTR Driver quests
+Location: In-raid on Streets of Tarkov and Woods (drives the BTR armored vehicle)
+Services: Taxi rides, covering fire support, in-raid item extraction
+
+BTR Driver Quests:
+Saving the Mole: Grants access to BTR services
+A Helping Hand: Prerequisite from Mechanic to unlock BTR Driver
+Shipping Delay Part 1: Package handover to Prapor
+Shipping Delay Part 2: Navigate between buildings rapidly
+Hot Wheels: Mark tires (can boost BTR rep even if failed)
+Swift Retribution: Kill 10 Scavs on Woods
+Inevitable Response: Kill 5 Scavs on Woods + 5 on Reserve
+Protect The Sky: Find package on Woods, deliver to BTR Driver (WARNING: completing before Lightkeeper's "Simple Side Job" will fail that quest)
+Discombobulate: Stash 3 VOG-25 Khattabka grenades at RPG ammo crates on Woods (final quest)
+
+IMPORTANT: Harming BTR Driver's gunner = loses reputation with BTR Driver
 
 === MAPS & EXTRACTS ===
 Customs: ZB-1011(key), ZB-1012(key), Dorms V-Ex($7000), Crossroads, Trailer Park, RUAF Gate, Old Gas, Smuggler's Boat
@@ -193,7 +198,7 @@ Streets of Tarkov: Collapsed Crane, Evacuation Zone, Klimov Street, Pineapple Ju
 Lighthouse: Path to Shoreline, Side Tunnel, Armored Train, Southern Road
 Ground Zero: Multiple PMC extracts, various Scav extracts
 Factory: Gate 3, Cellars, Camera Bunker Door(key)
-Terminal: New map added in 1.0 release
+Terminal: New map added in 1.0 release — final story map where you "escape Tarkov"
 
 === AMMO TIERS (BEST → BUDGET) ===
 5.45x39: BS > BT > BP > PP
@@ -217,7 +222,7 @@ Tagilla: Factory — welding mask + hammer, rushes players, drops unique gear
 Glukhar: Reserve (train station/buildings) — 6 guards with ASh-12/RPK, heavy gear
 Knight/Birdeye/BigPipe: Lighthouse/Woods/Customs — 3-man rogue boss group, very dangerous
 Kaban: Streets of Tarkov — guards with heavy weapons, controls area near car dealership
-The Partisan: Terminal (new 1.0 boss)
+The Partisan: Terminal (new 1.0 boss) — guards the final area
 
 === FLEA MARKET ===
 Unlocks at level 15
@@ -231,4 +236,94 @@ Scav Case: Random loot runs (moonshine, intel folder, 95K)
 Work Bench: Craft ammo and weapon parts
 Medstation: Craft medical supplies (Salewa, IFAK)
 Intelligence Center: Reduced scav cooldown
+
+=== CURRENT PATCH & META (as of March 2026) ===
+Current Version: 1.0.2.5 (released March 5, 2026)
+
+Meta Changes in 1.0.2.5:
+- Flash hiders and muzzle brakes now give MORE recoil reduction (buffed)
+- Suppressors recoil bonus REDUCED but lower ergonomics penalty
+- This means non-suppressed builds are now more viable — diversifies gun builds
+- High-capacity magazines: reduced ergonomics penalty, faster inspection
+- Stat differences between pistol grips, front grips, buttstocks NARROWED
+- Developers want players to choose attachments by aesthetics/playstyle, not just "best stats"
+
+Performance:
+- Faster matchmaking (permanent integration of tested system)
+- Faster raid loading and post-raid stats
+- Faster client/menu loading
+- DLSS updated to version 4.5
+
+=== WIPE & SEASONS SYSTEM (NEW IN 1.0) ===
+Old wipe system REPLACED by seasonal system:
+- Permanent character: long-term progression, never wiped
+- Seasonal character: fresh start every ~6 months with unique rules
+- Season rewards transfer to permanent character
+- Season 1 started with 1.0 launch (November 15, 2025)
+- Season 2 expected Q4 2026
+- PvE players can manually wipe but it's not mandatory
+
+=== EVENTS & 2026 ROADMAP ===
+Past Events:
+- Kolotun Event (December 2025): New questline with 1.0.1.0 update
+- New Year Twitch Drops (Dec 2025 - Jan 2026): In-game item drops for watching streams
+- Lunar New Year 2026 (February 2026): Arena event with new quests
+
+Upcoming 2026:
+Q1 (Jan-Mar): Icebreaker Ship event on Terminal — own questline + single-player story. DLSS 4.5, reconnect rework
+Q2 (Apr-Jun): NEW BOSS character, large-scale in-game event. Vegetation rework across ALL maps. New PMC customization. Seasonal/battle pass system launch
+Q3 (Jul-Sep): Arena launches on Steam — new locations, game mode, battlepass. New event + interactive elements (shoot door locks, car alarms)
+Q4 (Oct-Dec): Season 2 wipe. Scav Life DLC — dedicated Scav profile with secure container, play as Scav boss, Scav social zone
+
+=== TWITCH STREAMING KNOWLEDGE ===
+Tarkov Twitch Community:
+- EFT is consistently a top 20 game on Twitch
+- Major streamers: Pestily, Lvndmark, Shroud, DrLupo, Willerz, Klean, JesseKazam, Bakeezy, GigaBeef
+- Twitch Drops events drive massive viewership spikes (up to 500K+ concurrent viewers)
+- BSG does official Twitch Drops events ~2-3 times per year (typically New Year, wipe events)
+
+Streaming Tips for Tarkov:
+- Raid commentary: call out loot, spawns, rotations for viewers
+- Viewer interaction: let chat vote on loadouts, challenge runs
+- Popular stream formats: hardcore runs, zero-to-hero, quest guides, boss hunting
+- Key moments viewers love: chad plays, extract camping encounters, rare loot finds, boss kills
+- Tarkov loot runs and guides are popular YouTube/Twitch content
+
+Common Twitch Chat Terms in Tarkov:
+- "rat" = passive/sneaky player, "chad" = aggressive/well-geared player
+- "head eyes" = frustrating headshot death
+- "one-tap" = killed in single shot
+- "juice cannon" = overpowered gun build
+- "exit camper" = player camping near extracts
+- "labs card" = valuable item for Labs access
+- "kappa" = Kappa container (reward for completing almost all quests)
+- "thicc" = Thicc Items Case or Thicc Weapons Case
+'''
+
+# Twitch-specific knowledge (injected when Twitch context is detected)
+TWITCH_REFERENCE = '''
+=== TWITCH STREAMING CONTEXT ===
+You are co-hosting a Twitch stream about Escape from Tarkov.
+
+Stream Engagement Tips:
+- Hype up the streamer's plays: "Oh that was CLEAN!"
+- React to deaths: "Head eyes again? Classic Tarkov."
+- Comment on loot: "That's a fat haul, let's go!"
+- Engage with chat topics naturally
+- Keep energy high during raids, chill during inventory management
+- Reference recent events/patches to show you're up to date
+
+Current Hot Topics (March 2026):
+- Patch 1.0.2.5 attachment rebalancing — suppressor meta is dead, muzzle brakes are king now
+- Faster matchmaking has been great, community loves it
+- Q2 2026 new boss hype — who/what could it be?
+- Scav Life DLC speculation for Q4
+- Season 2 wipe timing discussions
+- Arena launching on Steam in Q3
+
+Popular Viewer Questions:
+- "What's the best ammo for X?" → reference ammo tiers
+- "How do I do Shooter Born in Heaven?" → 5 headshots per map, 8 maps, bolt-action, no distance req
+- "When is next wipe?" → Season 2 expected Q4 2026
+- "Is the game worth it in 2026?" → Yes, 1.0 brought story mode, seasonal system, way more content
 '''

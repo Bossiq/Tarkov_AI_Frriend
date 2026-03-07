@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>Real-time voice AI companion for Escape from Tarkov</strong><br/>
-  Ava Multilingual Neural Voice • Sprite Avatar • OBS Overlay • Groq/Ollama LLM
+  3D VRM Avatar • Mixamo Animations • Neural Voice • Groq/Ollama LLM
 </p>
 
 <p align="center">
@@ -44,6 +44,9 @@
 | 🌍 **Language Selector** | UI dropdown to switch language on-the-fly |
 | ⚡ **Auto-Failover** | Groq rate-limit → instant Ollama switch → auto switch-back |
 | 🔇 **Smart Barge-In** | Interrupt the AI mid-speech (keyboard/laughter ignored, real speech detected) |
+| 🎭 **3D VRM Avatar** | Full 3D anime character with motion-captured animations (Three.js + VRM) |
+| 💃 **16 Animations** | Wave, clap, dance, think, bow, salute, celebrate, and more — AI-triggered |
+| 🔉 **Noise Reduction** | Spectral noise gating removes background sounds before transcription |
 
 ---
 
@@ -167,6 +170,7 @@ All settings are in `.env` (copy from `.env.example`):
 | `LOG_LEVEL` | `INFO` | Logging verbosity |
 | `TWITCH_TOKEN` | — | Twitch OAuth token (optional) |
 | `TWITCH_INITIAL_CHANNELS` | — | Twitch channel name (optional) |
+| `AVATAR_3D` | `true` | Enable 3D VRM avatar (set to `false` for sprite-only mode) |
 
 ### LLM Engine Selection
 
@@ -196,43 +200,41 @@ Tarkov_AI_Frriend/
 ├── twitch_bot.py        # Twitch chat integration
 ├── video_capture.py     # Screen capture module
 ├── logging_config.py    # Logging configuration
+├── avatar_3d.py         # 3D VRM avatar (Three.js, AnimationMixer, pywebview)
+├── download_animations.py # Helper to download Mixamo FBX animations
 ├── requirements.txt     # Python dependencies
 ├── .env.example         # Environment template (copy to .env)
 ├── CHANGELOG.md         # Version history
 ├── LICENSE              # MIT License
-├── assets/              # Avatar expression sprites (24 PNGs)
-│   ├── idle.png         # Default idle expression
-│   ├── blink.png        # Blink frame
-│   ├── listen.png       # Listening expression
-│   ├── think.png        # Thinking expression
-│   ├── smile.png        # Smile
-│   ├── smirk.png        # Smirk
-│   ├── surprise.png     # Surprised
-│   ├── concern.png      # Concerned
-│   ├── confident.png    # Confident
-│   ├── excited.png      # Excited
-│   ├── speak_calm.png   # Mouth: calm speaking
-│   ├── speak_mid.png    # Mouth: mid speaking
-│   ├── speak_open.png   # Mouth: open speaking
-│   ├── speak_wide.png   # Mouth: wide speaking
-│   ├── smile_speak.png  # Speaking while smiling
-│   ├── talk_a.png       # Legacy talk frame A
-│   ├── talk_b.png       # Legacy talk frame B
-│   ├── talk_c–e.png     # Talk frames C-E
-│   └── avatar.png       # App icon / thumbnail
-└── models/              # Downloaded model files (auto-created, gitignored)
+├── assets/              # Avatar assets
+│   ├── avatar_3d.html   # 3D VRM renderer (Three.js + embedded animations)
+│   ├── animations/      # Optional Mixamo FBX files (upgrade path)
+│   ├── idle.png         # Sprite: default idle expression
+│   ├── blink.png        # Sprite: blink frame
+│   └── ...              # Other sprite expressions
 ```
 
-## 🎭 Avatar Animation
+## 🎭 Avatar System
 
-The avatar uses a **sprite-based holographic system** with organic animation:
+The app supports two avatar modes:
 
-- **24 expression sprites**: idle, blink, listen, think, speak (4 levels), smile, smirk, surprise, concern, confident, excited, etc.
-- **Cross-fade transitions**: 66ms smooth blending between expression states
-- **Holographic post-processing**: Scanlines, chromatic aberration, glow, flicker
-- **Organic motion**: Perlin-noise head sway, breathing scale, jaw bounce
-- **Blink cycles**: Natural intervals (2-5 seconds) with double-blink 15% chance
-- **Expression engine**: Emotion state machine with priority-based overrides and auto-decay
+### 3D VRM Avatar (default, `AVATAR_3D=true`)
+
+- **VRM model** loaded via Three.js + `@pixiv/three-vrm`
+- **16 embedded animations**: idle, wave, clap, think, point, shrug, celebrate, salute, nod, headShake, bow, crossArms, facepalm, dance, laugh, thumbsUp
+- **Smooth keyframe interpolation** using `THREE.InterpolateSmooth` (catmull-rom curves)
+- **AnimationMixer** with crossfade blending between animations
+- **AI-driven gestures**: The LLM uses `[gesture:NAME]` tags to trigger animations
+- **Lip sync**: RMS amplitude → mouth blend shapes
+- **Emotions**: Smooth blend shape interpolation (happy, angry, sad, surprised)
+- **Autonomous behavior**: Random blinks, gaze shifts, idle fidgets
+- **Upgrade path**: Drop Mixamo FBX files in `assets/animations/` for motion-captured quality
+
+### Sprite Avatar (`AVATAR_3D=false`)
+
+- 24 expression sprites with cross-fade transitions
+- Holographic post-processing (scanlines, glow, flicker)
+- Organic motion (Perlin-noise sway, breathing, blinks)
 
 ---
 

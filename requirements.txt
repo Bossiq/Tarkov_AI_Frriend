@@ -20,3 +20,6 @@ google-genai
 mss
 fastapi
 uvicorn
+pywebview
+noisereduce
+scipy

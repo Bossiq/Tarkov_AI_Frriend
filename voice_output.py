@@ -168,103 +168,111 @@ def _number_to_words(n: int) -> str:
 
 
 # ── Language detection word sets ─────────────────────────────────────
-# Words that are UNIQUELY Romanian (won't appear in English text).
+# Words that are UNIQUELY Romanian (will NOT appear in normal English).
+# Removed all ambiguous words: a, o, un, una, ce, cu, la, ei, el, ea,
+# eu, tu, mare, mic, bine, rau, mult, nou, hai, fi, pot, era, etc.
 # A single match is enough to classify as Romanian.
 _RO_UNIQUE = re.compile(
     r'\b('
-    # Pronouns / articles
-    r'eu|tu|el|ea|noi|voi|ei|ele|'
-    r'meu|mea|mei|mele|tau|ta|tai|tale|'
-    r'lui|lor|nostru|nostra|vostru|voastra|'
-    # Verbs — common forms
+    # Pronouns / possessives (unambiguous only)
+    r'meu|mea|mei|mele|tai|tale|'
+    r'nostru|nostra|vostru|voastra|'
+    # Verbs — unambiguous Romanian forms
     r'sunt|esti|este|suntem|sunteti|'
-    r'eram|erai|era|eram|erati|erau|'
-    r'fost|fi|fii|fie|fiind|'
-    r'fac|faci|facem|faceti|faca|facut|'
+    r'facem|faceti|facut|'
     r'stiu|stii|stie|stim|stiti|'
-    r'vreau|vrei|vrea|vrem|vreti|'
-    r'pot|poti|poate|putem|puteti|putea|'
+    r'vreau|vrei|vrem|vreti|'
+    r'putem|puteti|putea|'
     r'trebuie|trebui|'
-    r'spun|spui|spune|spunem|spuneti|spus|'
-    r'merg|mergi|merge|mergem|mergeti|mers|'
-    r'vin|vii|vine|venim|veniti|venit|'
-    r'dau|dai|dam|dati|dat|'
-    r'iau|iei|ia|luam|luati|luat|'
-    r'vad|vezi|vede|vedem|vedeti|vazut|'
-    r'aud|auzi|aude|auzit|'
-    r'cred|crezi|crede|crezut|'
-    r'zic|zici|zice|zicem|zis|'
-    # Prepositions / conjunctions
-    r'pentru|despre|dintre|dintr|catre|'
-    r'prin|peste|langa|intre|inainte|'
-    r'dupa|fara|pana|contra|'
-    r'daca|deci|insa|deoarece|fiindca|'
-    r'totusi|asadar|altfel|'
-    # Adverbs / common words
-    r'acum|inca|apoi|deja|doar|chiar|mereu|'
-    r'niciodata|intotdeauna|probabil|'
-    r'oriunde|oricum|oricand|oricine|tocmai|'
-    r'foarte|bine|rau|acolo|aici|'
-    r'nimic|nimeni|totul|ceva|cineva|fiecare|'
-    # Common nouns / adjectives
-    r'frumos|mare|mic|bun|buna|nou|vechi|'
-    r'mult|putin|repede|incet|'
-    # Greetings / interjections
-    r'salut|buna|noroc|multumesc|te rog|'
-    r'hai|haide|gata|destul|'
-    # Question words
-    r'ce|cine|cand|unde|cat|de ce|cum'
+    r'spunem|spuneti|spus|'
+    r'mergem|mergeti|mers|'
+    r'venim|veniti|venit|'
+    r'vedem|vedeti|vazut|'
+    r'auzit|crezut|'
+    # Prepositions / conjunctions (unambiguous)
+    r'pentru|despre|dintre|catre|'
+    r'langa|inainte|'
+    r'dupa|fara|pana|'
+    r'daca|deci|deoarece|fiindca|'
+    r'totusi|asadar|'
+    # Adverbs (unambiguous)
+    r'acum|doar|chiar|mereu|'
+    r'niciodata|intotdeauna|'
+    r'oriunde|oricum|oricand|tocmai|'
+    r'acolo|aici|'
+    r'nimic|nimeni|fiecare|'
+    # Nouns / adjectives (unambiguous)
+    r'frumos|repede|incet|'
+    # Greetings (unambiguous)
+    r'salut|noroc|multumesc|'
+    r'haide|gata|destul|'
+    # Question words (unambiguous)
+    r'cine|cand|unde'
     r')\b',
     re.IGNORECASE
 )
 
 # Words that MIGHT be Romanian but could also appear in other contexts.
-# Need 2+ to confirm.
+# Need 3+ to confirm (raised from 2 to reduce false positives).
+# Removed highly ambiguous: 'a', 'o', 'un', 'ce' (common in English).
 _RO_COMMON = re.compile(
-    r'\b(da|nu|si|sau|mai|la|pe|cu|din|am|ai|a|o|un|una|sa|ce)\b',
+    r'\b(da|nu|si|sau|mai|la|pe|cu|din|am|ai|una|sa)\b',
     re.IGNORECASE
 )
 
 # Common transliterated Russian words (when LLM writes Russian in Latin script)
+# Removed ambiguous: 'da', 'nu', 'net', 'brat' (common in English).
 _RU_TRANSLIT = re.compile(
     r'\b('
-    r'privet|zdorovo|nu|da|net|'
+    r'privet|zdorovo|'
     r'spasibo|pozhaluysta|khorosho|'
-    r'davay|poydem|brat|bratishka|bratan|'
-    r'kak|dela|chto|gde|kogda|pochemu|'
-    r'mozhno|nado|nyet|harasho|'
-    r'poka|dosvidaniya|zdravstvuyte'
+    r'davay|poydem|bratishka|bratan|'
+    r'chto|kogda|pochemu|'
+    r'mozhno|nado|harasho|'
+    r'dosvidaniya|zdravstvuyte'
     r')\b',
     re.IGNORECASE
 )
 
 
-def _detect_language(text: str) -> str:
+def _detect_language(text: str, hint: str = "en") -> str:
     """Detect language from text content. Returns 'ru', 'ro', or 'en'.
+
+    Args:
+        text: The text to analyze.
+        hint: Language hint from Whisper STT (used as tiebreaker).
 
     Uses a multi-signal scoring approach:
       1. Cyrillic characters → instant Russian
       2. Romanian diacritics (ă, â, î, ș, ț) → instant Romanian
-      3. Uniquely Romanian words → 1 match = Romanian
-      4. Common short Romanian words (da, nu, si) → 2+ matches = Romanian
+      3. Uniquely Romanian words → 1 match = Romanian (min 3 words)
+      4. Common short Romanian words → 3+ matches = Romanian
       5. Transliterated Russian words → fallback Russian detection
-      6. Default → English
+      6. Default → hint language (usually 'en')
     """
-    # Level 1: Character-based (instant, unambiguous)
+    # Require minimum text length for non-English detection
+    # (short fragments produce too many false positives)
+    word_count = len(text.split())
+
+    # Level 1: Character-based (instant, unambiguous — no min length)
     if _CYRILLIC.search(text):
         return "ru"
     if _ROMANIAN_CHARS.search(text):
         return "ro"
 
-    # Level 2: Uniquely Romanian words (1 match = confident)
+    # Level 2: Uniquely Romanian words (unambiguous, no min length needed)
     unique_ro = _RO_UNIQUE.findall(text)
     if unique_ro:
         logger.debug("Romanian detected (unique words: %s)", unique_ro[:3])
         return "ro"
 
-    # Level 3: Common short Romanian words (ambiguous alone, 2+ = Romanian)
+    # For weaker word-based detection, require at least 3 words
+    if word_count < 3:
+        return hint
+
+    # Level 3: Common short Romanian words (ambiguous alone, 3+ = Romanian)
     common_ro = _RO_COMMON.findall(text)
-    if len(common_ro) >= 2:
+    if len(common_ro) >= 3:
         logger.debug("Romanian detected (common words: %s)", common_ro[:4])
         return "ro"
 
@@ -272,7 +280,7 @@ def _detect_language(text: str) -> str:
     if _RU_TRANSLIT.search(text):
         return "ru"
 
-    return "en"
+    return hint
 
 
 # ── macOS 'say' voice mapping ────────────────────────────────────────
@@ -312,6 +320,7 @@ class VoiceOutput:
         self._kokoro_lock = threading.Lock()
         self._edge_available = False
         self._language_hint: str = "en"          # Hint from Whisper detection
+        self._response_lang: Optional[str] = None  # Locked lang for current response
 
         # If the user pinned a language via WHISPER_LANGUAGE, force ALL
         # TTS output to that language — eliminates mid-response voice
@@ -598,14 +607,22 @@ class VoiceOutput:
         else:
             self._speak_say(clean)
 
+    def set_language_hint(self, lang: str) -> None:
+        """Set language hint from Whisper STT for the upcoming response."""
+        self._language_hint = lang if lang else "en"
+
     def speak_streamed(self, sentences: Generator[str, None, None]) -> None:
         """Speak sentences as they stream from the LLM.
 
         Each sentence is spoken AS IT ARRIVES -- true streaming for
         instant feedback.  Stops consuming sentences if barge-in
         interrupt is detected between sentences.
+
+        Language is locked on the FIRST sentence to prevent mid-response
+        voice switching (e.g. English → Romanian → English).
         """
         self._was_interrupted = False
+        self._response_lang = None  # Reset per-response language lock
 
         for sentence in sentences:
             # Check interrupt BETWEEN sentences
@@ -628,8 +645,16 @@ class VoiceOutput:
             if not clean.strip():
                 continue
 
-            # Detect language per sentence for correct voice selection
-            lang = self._forced_lang or _detect_language(sentence)
+            # Language detection: lock on first sentence for entire response.
+            # Priority: forced lang > response lock > detect with hint.
+            if self._forced_lang:
+                lang = self._forced_lang
+            elif self._response_lang:
+                lang = self._response_lang
+            else:
+                lang = _detect_language(sentence, hint=self._language_hint)
+                self._response_lang = lang  # Lock for remaining sentences
+                logger.info("Response language locked: %s", lang)
 
             spoke = False
             if self._edge_available:

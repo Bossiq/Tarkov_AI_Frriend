@@ -1,0 +1,647 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <title>VRM Avatar — Motion Animations</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      overflow: hidden;
+      background: transparent;
+      width: 100vw;
+      height: 100vh;
+    }
+  </style>
+</head>
+
+<body>
+  <script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.161/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.161/examples/jsm/"
+  }
+}
+</script>
+  <script type="module">
+    import * as THREE from 'three';
+    import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+    import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+
+    const VRM = await import('https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@3/lib/three-vrm.module.min.js');
+
+    // ── Mixamo → VRM bone map (for FBX import upgrade path) ─────
+    const mixamoVRMRigMap = {
+      'mixamorigHips': 'hips', 'mixamorigSpine': 'spine', 'mixamorigSpine1': 'chest',
+      'mixamorigSpine2': 'upperChest', 'mixamorigNeck': 'neck', 'mixamorigHead': 'head',
+      'mixamorigLeftShoulder': 'leftShoulder', 'mixamorigLeftArm': 'leftUpperArm',
+      'mixamorigLeftForeArm': 'leftLowerArm', 'mixamorigLeftHand': 'leftHand',
+      'mixamorigRightShoulder': 'rightShoulder', 'mixamorigRightArm': 'rightUpperArm',
+      'mixamorigRightForeArm': 'rightLowerArm', 'mixamorigRightHand': 'rightHand',
+      'mixamorigLeftUpLeg': 'leftUpperLeg', 'mixamorigLeftLeg': 'leftLowerLeg',
+      'mixamorigLeftFoot': 'leftFoot', 'mixamorigRightUpLeg': 'rightUpperLeg',
+      'mixamorigRightLeg': 'rightLowerLeg', 'mixamorigRightFoot': 'rightFoot',
+      'mixamorigLeftHandThumb1': 'leftThumbMetacarpal',
+      'mixamorigLeftHandThumb2': 'leftThumbProximal',
+      'mixamorigLeftHandIndex1': 'leftIndexProximal',
+      'mixamorigLeftHandMiddle1': 'leftMiddleProximal',
+      'mixamorigLeftHandRing1': 'leftRingProximal',
+      'mixamorigLeftHandPinky1': 'leftLittleProximal',
+      'mixamorigRightHandThumb1': 'rightThumbMetacarpal',
+      'mixamorigRightHandThumb2': 'rightThumbProximal',
+      'mixamorigRightHandIndex1': 'rightIndexProximal',
+      'mixamorigRightHandMiddle1': 'rightMiddleProximal',
+      'mixamorigRightHandRing1': 'rightRingProximal',
+      'mixamorigRightHandPinky1': 'rightLittleProximal',
+    };
+
+    // ── Retarget Mixamo FBX → VRM clip ──────────────────────────
+    function retargetMixamoClip(clip, vrm) {
+      const tracks = [];
+      clip.tracks.forEach((track) => {
+        const parts = track.name.split('.');
+        const vrmBoneName = mixamoVRMRigMap[parts[0]];
+        if (!vrmBoneName) return;
+        const vrmNode = vrm.humanoid.getNormalizedBoneNode(vrmBoneName);
+        if (!vrmNode) return;
+        if (track instanceof THREE.QuaternionKeyframeTrack) {
+          tracks.push(new THREE.QuaternionKeyframeTrack(
+            `${vrmNode.name}.${parts[1]}`, track.times,
+            track.values.map((v, i) => vrm.meta?.metaVersion === '0' && i % 2 === 0 ? -v : v),
+          ));
+        } else if (track instanceof THREE.VectorKeyframeTrack && vrmBoneName === 'hips') {
+          tracks.push(new THREE.VectorKeyframeTrack(
+            `${vrmNode.name}.${parts[1]}`, track.times,
+            track.values.map((v, i) => {
+              if (vrm.meta?.metaVersion === '0' && i % 3 !== 1) return -v * 0.01;
+              return v * 0.01;
+            }),
+          ));
+        }
+      });
+      return new THREE.AnimationClip(clip.name || 'mixamo', clip.duration, tracks);
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    // EMBEDDED KEYFRAME ANIMATIONS (self-contained, no files)
+    // Creates smooth multi-frame AnimationClips using quaternion
+    // keyframe tracks. Each pose is defined as Euler angles, then
+    // converted to quaternion keyframes with interpolation.
+    // ══════════════════════════════════════════════════════════════
+    function eulerToQuat(x = 0, y = 0, z = 0) {
+      return new THREE.Quaternion().setFromEuler(new THREE.Euler(x, y, z));
+    }
+
+    function buildClip(name, duration, boneKeyframes, vrm) {
+      const tracks = [];
+      for (const [boneName, keyframes] of Object.entries(boneKeyframes)) {
+        const node = vrm.humanoid.getNormalizedBoneNode(boneName);
+        if (!node) continue;
+        const times = [];
+        const values = [];
+        for (const kf of keyframes) {
+          times.push(kf.t);
+          const q = eulerToQuat(kf.x || 0, kf.y || 0, kf.z || 0);
+          values.push(q.x, q.y, q.z, q.w);
+        }
+        tracks.push(new THREE.QuaternionKeyframeTrack(
+          `${node.name}.quaternion`, times, values,
+          THREE.InterpolateSmooth,  // smooth catmull-rom interpolation!
+        ));
+      }
+      return new THREE.AnimationClip(name, duration, tracks);
+    }
+
+    function createEmbeddedAnimations(vrm) {
+      const clips = {};
+
+      // ── IDLE: subtle breathing sway (looping) ─────────────────
+      clips.idle = buildClip('idle', 4.0, {
+        head: [
+          { t: 0, x: 0.01, z: 0.01 }, { t: 1, x: -0.01, z: -0.01 },
+          { t: 2, x: 0.01, z: 0.02 }, { t: 3, x: -0.01, z: -0.01 }, { t: 4, x: 0.01, z: 0.01 },
+        ],
+        spine: [
+          { t: 0, x: 0.01 }, { t: 2, x: -0.01 }, { t: 4, x: 0.01 },
+        ],
+        leftUpperArm: [
+          { t: 0, z: -1.15, x: 0.05 }, { t: 2, z: -1.13, x: 0.07 }, { t: 4, z: -1.15, x: 0.05 },
+        ],
+        rightUpperArm: [
+          { t: 0, z: 1.15, x: 0.05 }, { t: 2, z: 1.13, x: 0.07 }, { t: 4, z: 1.15, x: 0.05 },
+        ],
+        leftLowerArm: [
+          { t: 0, z: -0.25, y: -0.15 }, { t: 2, z: -0.23, y: -0.13 }, { t: 4, z: -0.25, y: -0.15 },
+        ],
+        rightLowerArm: [
+          { t: 0, z: 0.25, y: 0.15 }, { t: 2, z: 0.23, y: 0.13 }, { t: 4, z: 0.25, y: 0.15 },
+        ],
+      }, vrm);
+
+      // ── WAVE: right hand wave ─────────────────────────────────
+      clips.wave = buildClip('wave', 2.5, {
+        rightUpperArm: [
+          { t: 0, z: 1.15, x: 0.05 }, { t: 0.4, z: 0.5, x: -0.1 }, { t: 2.1, z: 0.5, x: -0.1 }, { t: 2.5, z: 1.15, x: 0.05 },
+        ],
+        rightLowerArm: [
+          { t: 0, z: 0.25, y: 0.15 }, { t: 0.4, z: 0.2, x: -0.9 }, { t: 0.7, z: 0.3, x: -0.7 },
+          { t: 1.0, z: 0.2, x: -0.9 }, { t: 1.3, z: 0.3, x: -0.7 }, { t: 1.6, z: 0.2, x: -0.9 },
+          { t: 1.9, z: 0.3, x: -0.7 }, { t: 2.1, z: 0.2, x: -0.9 }, { t: 2.5, z: 0.25, y: 0.15 },
+        ],
+        head: [
+          { t: 0, x: 0 }, { t: 0.5, x: 0.05, z: 0.03 }, { t: 2, x: 0.05, z: 0.03 }, { t: 2.5, x: 0 },
+        ],
+      }, vrm);
+
+      // ── CLAP: both hands clapping ─────────────────────────────
+      clips.clap = buildClip('clap', 2.4, {
+        leftUpperArm: [
+          { t: 0, z: -1.15 }, { t: 0.3, z: -0.5, x: 0.35 }, { t: 2.1, z: -0.5, x: 0.35 }, { t: 2.4, z: -1.15 },
+        ],
+        rightUpperArm: [
+          { t: 0, z: 1.15 }, { t: 0.3, z: 0.5, x: 0.35 }, { t: 2.1, z: 0.5, x: 0.35 }, { t: 2.4, z: 1.15 },
+        ],
+        leftLowerArm: [
+          { t: 0, z: -0.25 }, { t: 0.3, z: -0.3, x: -0.5, y: -0.2 },
+          { t: 0.5, z: -0.2, x: -0.3, y: -0.3 }, { t: 0.7, z: -0.3, x: -0.5, y: -0.2 },
+          { t: 0.9, z: -0.2, x: -0.3, y: -0.3 }, { t: 1.1, z: -0.3, x: -0.5, y: -0.2 },
+          { t: 1.3, z: -0.2, x: -0.3, y: -0.3 }, { t: 1.5, z: -0.3, x: -0.5, y: -0.2 },
+          { t: 1.7, z: -0.2, x: -0.3, y: -0.3 }, { t: 1.9, z: -0.3, x: -0.5, y: -0.2 },
+          { t: 2.1, z: -0.3, x: -0.5, y: -0.2 }, { t: 2.4, z: -0.25 },
+        ],
+        rightLowerArm: [
+          { t: 0, z: 0.25 }, { t: 0.3, z: 0.3, x: -0.5, y: 0.2 },
+          { t: 0.5, z: 0.2, x: -0.3, y: 0.3 }, { t: 0.7, z: 0.3, x: -0.5, y: 0.2 },
+          { t: 0.9, z: 0.2, x: -0.3, y: 0.3 }, { t: 1.1, z: 0.3, x: -0.5, y: 0.2 },
+          { t: 1.3, z: 0.2, x: -0.3, y: 0.3 }, { t: 1.5, z: 0.3, x: -0.5, y: 0.2 },
+          { t: 1.7, z: 0.2, x: -0.3, y: 0.3 }, { t: 1.9, z: 0.3, x: -0.5, y: 0.2 },
+          { t: 2.1, z: 0.3, x: -0.5, y: 0.2 }, { t: 2.4, z: 0.25 },
+        ],
+      }, vrm);
+
+      // ── THINK: hand to chin ───────────────────────────────────
+      clips.think = buildClip('think', 3.0, {
+        rightUpperArm: [
+          { t: 0, z: 1.15 }, { t: 0.5, z: 0.2, x: 0.3 }, { t: 2.5, z: 0.2, x: 0.3 }, { t: 3, z: 1.15 },
+        ],
+        rightLowerArm: [
+          { t: 0, z: 0.25 }, { t: 0.5, z: 0.4, x: -0.9, y: 0.5 }, { t: 2.5, z: 0.4, x: -0.9, y: 0.5 }, { t: 3, z: 0.25 },
+        ],
+        head: [
+          { t: 0, x: 0 }, { t: 0.5, x: 0.08, z: 0.04 }, { t: 1.5, x: 0.06, z: 0.06 },
+          { t: 2.5, x: 0.08, z: 0.04 }, { t: 3, x: 0 },
+        ],
+      }, vrm);
+
+      // ── POINT: pointing forward ───────────────────────────────
+      clips.point = buildClip('point', 2.5, {
+        rightUpperArm: [
+          { t: 0, z: 1.15 }, { t: 0.4, z: 0.5, x: 0 }, { t: 2.1, z: 0.5, x: 0 }, { t: 2.5, z: 1.15 },
+        ],
+        rightLowerArm: [
+          { t: 0, z: 0.25 }, { t: 0.4, z: 0.1, x: -0.3 }, { t: 2.1, z: 0.1, x: -0.3 }, { t: 2.5, z: 0.25 },
+        ],
+        head: [
+          { t: 0, z: 0 }, { t: 0.4, z: 0.05 }, { t: 2.1, z: 0.05 }, { t: 2.5, z: 0 },
+        ],
+      }, vrm);
+
+      // ── SHRUG: both shoulders up, arms out ────────────────────
+      clips.shrug = buildClip('shrug', 2.5, {
+        leftUpperArm: [
+          { t: 0, z: -1.15 }, { t: 0.4, z: -0.8, x: 0.15 }, { t: 2.1, z: -0.8, x: 0.15 }, { t: 2.5, z: -1.15 },
+        ],
+        rightUpperArm: [
+          { t: 0, z: 1.15 }, { t: 0.4, z: 0.8, x: 0.15 }, { t: 2.1, z: 0.8, x: 0.15 }, { t: 2.5, z: 1.15 },
+        ],
+        leftLowerArm: [
+          { t: 0, z: -0.25 }, { t: 0.4, z: -0.15, x: -0.6 }, { t: 2.1, z: -0.15, x: -0.6 }, { t: 2.5, z: -0.25 },
+        ],
+        rightLowerArm: [
+          { t: 0, z: 0.25 }, { t: 0.4, z: 0.15, x: -0.6 }, { t: 2.1, z: 0.15, x: -0.6 }, { t: 2.5, z: 0.25 },
+        ],
+        leftShoulder: [
+          { t: 0, z: -0.03 }, { t: 0.4, z: -0.15 }, { t: 2.1, z: -0.15 }, { t: 2.5, z: -0.03 },
+        ],
+        rightShoulder: [
+          { t: 0, z: 0.03 }, { t: 0.4, z: 0.15 }, { t: 2.1, z: 0.15 }, { t: 2.5, z: 0.03 },
+        ],
+        head: [
+          { t: 0, z: 0 }, { t: 0.4, z: 0.06 }, { t: 2.1, z: 0.06 }, { t: 2.5, z: 0 },
+        ],
+      }, vrm);
+
+      // ── CELEBRATE: arms up, joyful ────────────────────────────
+      clips.celebrate = buildClip('celebrate', 3.0, {
+        leftUpperArm: [
+          { t: 0, z: -1.15 }, { t: 0.4, z: -0.7, x: -0.1 }, { t: 1.5, z: -0.65, x: -0.15 },
+          { t: 2.6, z: -0.7, x: -0.1 }, { t: 3, z: -1.15 },
+        ],
+        rightUpperArm: [
+          { t: 0, z: 1.15 }, { t: 0.4, z: 0.7, x: -0.1 }, { t: 1.5, z: 0.65, x: -0.15 },
+          { t: 2.6, z: 0.7, x: -0.1 }, { t: 3, z: 1.15 },
+        ],
+        leftLowerArm: [
+          { t: 0, z: -0.25 }, { t: 0.4, z: -0.1, x: -0.7 }, { t: 2.6, z: -0.1, x: -0.7 }, { t: 3, z: -0.25 },
+        ],
+        rightLowerArm: [
+          { t: 0, z: 0.25 }, { t: 0.4, z: 0.1, x: -0.7 }, { t: 2.6, z: 0.1, x: -0.7 }, { t: 3, z: 0.25 },
+        ],
+        head: [
+          { t: 0, x: 0 }, { t: 0.5, x: -0.05 }, { t: 1.5, x: 0.05 }, { t: 2.5, x: -0.05 }, { t: 3, x: 0 },
+        ],
+        spine: [
+          { t: 0, x: 0 }, { t: 0.5, x: -0.02 }, { t: 1.5, x: 0.02 }, { t: 2.5, x: -0.02 }, { t: 3, x: 0 },
+        ],
+      }, vrm);
+
+      // ── SALUTE: military salute ───────────────────────────────
+      clips.salute = buildClip('salute', 2.5, {
+        rightUpperArm: [
+          { t: 0, z: 1.15 }, { t: 0.4, z: 0.4, x: -0.1 }, { t: 2.1, z: 0.4, x: -0.1 }, { t: 2.5, z: 1.15 },
+        ],
+        rightLowerArm: [
+          { t: 0, z: 0.25 }, { t: 0.4, z: 0.3, x: -1.1, y: 0.3 }, { t: 2.1, z: 0.3, x: -1.1, y: 0.3 }, { t: 2.5, z: 0.25 },
+        ],
+        head: [
+          { t: 0, x: 0 }, { t: 0.3, x: 0.03 }, { t: 2.2, x: 0.03 }, { t: 2.5, x: 0 },
+        ],
+      }, vrm);
+
+      // ── NOD: head nod yes ─────────────────────────────────────
+      clips.nod = buildClip('nod', 2.0, {
+        head: [
+          { t: 0, x: 0 }, { t: 0.3, x: 0.12 }, { t: 0.5, x: -0.02 }, { t: 0.8, x: 0.12 },
+          { t: 1.0, x: -0.02 }, { t: 1.3, x: 0.12 }, { t: 1.5, x: -0.02 }, { t: 2.0, x: 0 },
+        ],
+      }, vrm);
+
+      // ── HEAD SHAKE: head shake no ─────────────────────────────
+      clips.headShake = buildClip('headShake', 2.0, {
+        head: [
+          { t: 0, z: 0 }, { t: 0.3, z: 0.1 }, { t: 0.6, z: -0.1 }, { t: 0.9, z: 0.1 },
+          { t: 1.2, z: -0.1 }, { t: 1.5, z: 0.1 }, { t: 1.7, z: -0.05 }, { t: 2.0, z: 0 },
+        ],
+      }, vrm);
+
+      // ── BOW: bowing ───────────────────────────────────────────
+      clips.bow = buildClip('bow', 3.0, {
+        head: [
+          { t: 0, x: 0 }, { t: 0.5, x: 0.25 }, { t: 2.5, x: 0.25 }, { t: 3, x: 0 },
+        ],
+        spine: [
+          { t: 0, x: 0 }, { t: 0.5, x: 0.1 }, { t: 2.5, x: 0.1 }, { t: 3, x: 0 },
+        ],
+        leftUpperArm: [
+          { t: 0, z: -1.15 }, { t: 0.5, z: -1.2, x: 0.05 }, { t: 2.5, z: -1.2, x: 0.05 }, { t: 3, z: -1.15 },
+        ],
+        rightUpperArm: [
+          { t: 0, z: 1.15 }, { t: 0.5, z: 1.2, x: 0.05 }, { t: 2.5, z: 1.2, x: 0.05 }, { t: 3, z: 1.15 },
+        ],
+      }, vrm);
+
+      // ── CROSS ARMS ────────────────────────────────────────────
+      clips.crossArms = buildClip('crossArms', 3.0, {
+        leftUpperArm: [
+          { t: 0, z: -1.15 }, { t: 0.5, z: -0.5, x: 0.45 }, { t: 2.5, z: -0.5, x: 0.45 }, { t: 3, z: -1.15 },
+        ],
+        rightUpperArm: [
+          { t: 0, z: 1.15 }, { t: 0.5, z: 0.5, x: 0.45 }, { t: 2.5, z: 0.5, x: 0.45 }, { t: 3, z: 1.15 },
+        ],
+        leftLowerArm: [
+          { t: 0, z: -0.25 }, { t: 0.5, z: -0.5, y: -0.7 }, { t: 2.5, z: -0.5, y: -0.7 }, { t: 3, z: -0.25 },
+        ],
+        rightLowerArm: [
+          { t: 0, z: 0.25 }, { t: 0.5, z: 0.5, y: 0.7 }, { t: 2.5, z: 0.5, y: 0.7 }, { t: 3, z: 0.25 },
+        ],
+      }, vrm);
+
+      // ── FACEPALM ──────────────────────────────────────────────
+      clips.facepalm = buildClip('facepalm', 3.0, {
+        rightUpperArm: [
+          { t: 0, z: 1.15 }, { t: 0.5, z: 0.2, x: 0.2 }, { t: 2.5, z: 0.2, x: 0.2 }, { t: 3, z: 1.15 },
+        ],
+        rightLowerArm: [
+          { t: 0, z: 0.25 }, { t: 0.5, z: 0.5, x: -1.1, y: 0.4 }, { t: 2.5, z: 0.5, x: -1.1, y: 0.4 }, { t: 3, z: 0.25 },
+        ],
+        head: [
+          { t: 0, x: 0 }, { t: 0.5, x: 0.1 }, { t: 2.5, x: 0.1 }, { t: 3, x: 0 },
+        ],
+      }, vrm);
+
+      // ── DANCE: fun side-to-side ───────────────────────────────
+      clips.dance = buildClip('dance', 3.0, {
+        head: [
+          { t: 0, z: 0 }, { t: 0.5, z: 0.08 }, { t: 1, z: -0.08 }, { t: 1.5, z: 0.08 },
+          { t: 2, z: -0.08 }, { t: 2.5, z: 0.08 }, { t: 3, z: 0 },
+        ],
+        spine: [
+          { t: 0, z: 0 }, { t: 0.5, z: 0.05 }, { t: 1, z: -0.05 }, { t: 1.5, z: 0.05 },
+          { t: 2, z: -0.05 }, { t: 2.5, z: 0.05 }, { t: 3, z: 0 },
+        ],
+        leftUpperArm: [
+          { t: 0, z: -1.15 }, { t: 0.3, z: -0.7, x: 0.1 }, { t: 0.8, z: -1.0 },
+          { t: 1.3, z: -0.7, x: 0.1 }, { t: 1.8, z: -1.0 },
+          { t: 2.3, z: -0.7, x: 0.1 }, { t: 2.7, z: -1.0 }, { t: 3, z: -1.15 },
+        ],
+        rightUpperArm: [
+          { t: 0, z: 1.15 }, { t: 0.3, z: 1.0 }, { t: 0.8, z: 0.7, x: 0.1 },
+          { t: 1.3, z: 1.0 }, { t: 1.8, z: 0.7, x: 0.1 },
+          { t: 2.3, z: 1.0 }, { t: 2.7, z: 0.7, x: 0.1 }, { t: 3, z: 1.15 },
+        ],
+        leftLowerArm: [
+          { t: 0, z: -0.25 }, { t: 0.3, z: -0.15, x: -0.5 }, { t: 0.8, z: -0.25 },
+          { t: 1.3, z: -0.15, x: -0.5 }, { t: 1.8, z: -0.25 },
+          { t: 2.3, z: -0.15, x: -0.5 }, { t: 2.7, z: -0.25 }, { t: 3, z: -0.25 },
+        ],
+        rightLowerArm: [
+          { t: 0, z: 0.25 }, { t: 0.3, z: 0.25 }, { t: 0.8, z: 0.15, x: -0.5 },
+          { t: 1.3, z: 0.25 }, { t: 1.8, z: 0.15, x: -0.5 },
+          { t: 2.3, z: 0.25 }, { t: 2.7, z: 0.15, x: -0.5 }, { t: 3, z: 0.25 },
+        ],
+      }, vrm);
+
+      // ── LAUGH: shaking body ───────────────────────────────────
+      clips.laugh = buildClip('laugh', 2.5, {
+        head: [
+          { t: 0, x: 0 }, { t: 0.3, x: -0.05 }, { t: 0.5, x: 0.08 }, { t: 0.7, x: -0.05 },
+          { t: 0.9, x: 0.08 }, { t: 1.1, x: -0.05 }, { t: 1.3, x: 0.08 },
+          { t: 1.5, x: -0.05 }, { t: 1.7, x: 0.06 }, { t: 2, x: 0.02 }, { t: 2.5, x: 0 },
+        ],
+        spine: [
+          { t: 0, x: 0 }, { t: 0.3, x: 0.02 }, { t: 0.5, x: -0.02 }, { t: 0.7, x: 0.02 },
+          { t: 0.9, x: -0.02 }, { t: 1.3, x: 0.02 }, { t: 1.7, x: -0.01 }, { t: 2.5, x: 0 },
+        ],
+        leftShoulder: [
+          { t: 0, z: -0.03 }, { t: 0.3, z: -0.08 }, { t: 0.5, z: -0.03 },
+          { t: 0.7, z: -0.08 }, { t: 0.9, z: -0.03 }, { t: 2.5, z: -0.03 },
+        ],
+        rightShoulder: [
+          { t: 0, z: 0.03 }, { t: 0.3, z: 0.08 }, { t: 0.5, z: 0.03 },
+          { t: 0.7, z: 0.08 }, { t: 0.9, z: 0.03 }, { t: 2.5, z: 0.03 },
+        ],
+      }, vrm);
+
+      // ── THUMBS UP ─────────────────────────────────────────────
+      clips.thumbsUp = buildClip('thumbsUp', 2.5, {
+        rightUpperArm: [
+          { t: 0, z: 1.15 }, { t: 0.4, z: 0.3, x: 0.1 }, { t: 2.1, z: 0.3, x: 0.1 }, { t: 2.5, z: 1.15 },
+        ],
+        rightLowerArm: [
+          { t: 0, z: 0.25 }, { t: 0.4, z: 0.3, x: -0.8 }, { t: 2.1, z: 0.3, x: -0.8 }, { t: 2.5, z: 0.25 },
+        ],
+        head: [
+          { t: 0, x: 0 }, { t: 0.4, x: 0.03, z: 0.02 }, { t: 2.1, x: 0.03, z: 0.02 }, { t: 2.5, x: 0 },
+        ],
+      }, vrm);
+
+      return clips;
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    // SCENE SETUP
+    // ══════════════════════════════════════════════════════════════
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setClearColor(0x000000, 0);
+    document.body.appendChild(renderer.domElement);
+
+    const scene = new THREE.Scene();
+    scene.background = null;
+    const camera = new THREE.PerspectiveCamera(30, window.innerWidth / window.innerHeight, 0.1, 50);
+    const params = new URLSearchParams(window.location.search);
+    const framing = params.get('framing') || 'bust';
+    if (framing === 'full') { camera.position.set(0, 1.0, 3.0); camera.lookAt(0, 0.9, 0); }
+    else { camera.position.set(0, 1.35, 1.6); camera.lookAt(0, 1.3, 0); }
+
+    scene.add(new THREE.AmbientLight(0xffffff, 1.5));
+    scene.add(new THREE.HemisphereLight(0xddeeff, 0x445566, 1.0));
+    const front = new THREE.DirectionalLight(0xffffff, 0.8);
+    front.position.set(0, 2, 3); scene.add(front);
+    const rimLight = new THREE.PointLight(0x00ddff, 0.6, 10);
+    rimLight.position.set(-1, 1.5, -1); scene.add(rimLight);
+
+    // ══════════════════════════════════════════════════════════════
+    // STATE
+    // ══════════════════════════════════════════════════════════════
+    let vrm = null, mixer = null;
+    const clips = {}, actions = {};
+    let currentAction = null;
+    let currentMode = 'idle', currentEmotion = 'neutral';
+    let mouthTarget = 0, mouthCurrent = 0;
+    let blinkTimer = 0, nextBlink = 2 + Math.random() * 3, blinking = false, blinkPhase = 0;
+    let emotionSmooth = { happy: 0, angry: 0, sad: 0, surprised: 0 };
+    let gazeTimer = 0, gazeTargetX = 0, gazeTargetZ = 0, gazeCurrentX = 0, gazeCurrentZ = 0;
+    let nextGazeShift = 2 + Math.random() * 3;
+    let fidgetTimer = 0, nextFidget = 12 + Math.random() * 10;
+
+    const EMOTION_MAP = {
+      neutral: { happy: 0, angry: 0, sad: 0, surprised: 0 },
+      happy: { happy: 0.2, angry: 0, sad: 0, surprised: 0 },
+      excited: { happy: 0.25, angry: 0, sad: 0, surprised: 0.15 },
+      amused: { happy: 0.15, angry: 0, sad: 0, surprised: 0.1 },
+      sarcastic: { happy: 0.1, angry: 0.1, sad: 0, surprised: 0 },
+      surprised: { happy: 0, angry: 0, sad: 0, surprised: 0.4 },
+      concerned: { happy: 0, angry: 0.05, sad: 0.2, surprised: 0.1 },
+      curious: { happy: 0.05, angry: 0, sad: 0, surprised: 0.2 },
+      confident: { happy: 0.15, angry: 0, sad: 0, surprised: 0 },
+      empathetic: { happy: 0.1, angry: 0, sad: 0.15, surprised: 0 },
+      focused: { happy: 0, angry: 0.1, sad: 0, surprised: 0 },
+      alarmed: { happy: 0, angry: 0.15, sad: 0, surprised: 0.3 },
+    };
+    const MODE_COLORS = { idle: 0x445566, listening: 0x00ff88, thinking: 0xffaa00, speaking: 0x00ddff };
+
+    function setExpression(name, value) {
+      if (!vrm?.expressionManager) return;
+      try { vrm.expressionManager.setValue(name, value); } catch (e) { }
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    // PLAY ANIMATION
+    // ══════════════════════════════════════════════════════════════
+    function playAnim(name, fadeTime = 0.5, loop = false) {
+      if (!mixer || !actions[name]) return false;
+      const next = actions[name];
+      next.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, loop ? Infinity : 1);
+      next.clampWhenFinished = !loop;
+      if (currentAction && currentAction !== next) {
+        next.reset().setEffectiveWeight(1).play();
+        currentAction.crossFadeTo(next, fadeTime, true);
+      } else {
+        next.reset().setEffectiveWeight(1).play();
+      }
+      if (!loop) {
+        const onDone = (e) => {
+          if (e.action === next) {
+            mixer.removeEventListener('finished', onDone);
+            if (actions['idle']) playAnim('idle', 0.5, true);
+          }
+        };
+        mixer.addEventListener('finished', onDone);
+      }
+      currentAction = next;
+      return true;
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    // LOAD VRM
+    // ══════════════════════════════════════════════════════════════
+    const modelUrl = params.get('model') || 'models/avatar.vrm';
+    const gltfLoader = new GLTFLoader();
+    gltfLoader.register((p) => new VRM.VRMLoaderPlugin(p));
+
+    gltfLoader.load(modelUrl, async (gltf) => {
+      vrm = gltf.userData.vrm;
+      scene.add(vrm.scene);
+
+      // Fix materials
+      vrm.scene.traverse((child) => {
+        if (child.isMesh && child.material) {
+          const mats = Array.isArray(child.material) ? child.material : [child.material];
+          mats.forEach((mat) => {
+            if (mat.map) {
+              child.material = new THREE.MeshBasicMaterial({
+                map: mat.map, side: THREE.DoubleSide,
+                transparent: mat.transparent, alphaTest: 0.5,
+              });
+            }
+          });
+        }
+      });
+
+      if (vrm.lookAt) vrm.lookAt.target = camera;
+
+      // Create mixer + embedded animations
+      mixer = new THREE.AnimationMixer(vrm.scene);
+      const embedded = createEmbeddedAnimations(vrm);
+      for (const [name, clip] of Object.entries(embedded)) {
+        clips[name] = clip;
+        actions[name] = mixer.clipAction(clip);
+      }
+
+      // Try loading Mixamo FBX files (upgrade path)
+      const fbxLoader = new FBXLoader();
+      const FBX_ANIMS = {
+        'idle': 'animations/idle.fbx', 'wave': 'animations/wave.fbx',
+        'clap': 'animations/clap.fbx', 'think': 'animations/think.fbx',
+        'celebrate': 'animations/celebrate.fbx', 'dance': 'animations/dance.fbx',
+      };
+      for (const [name, url] of Object.entries(FBX_ANIMS)) {
+        try {
+          const fbx = await new Promise((res, rej) => fbxLoader.load(url, res, undefined, rej));
+          if (fbx.animations[0]) {
+            fbx.animations[0].name = name;
+            const clip = retargetMixamoClip(fbx.animations[0], vrm);
+            clips[name] = clip;
+            actions[name] = mixer.clipAction(clip);
+            console.log(`[FBX] Loaded: ${name}`);
+          }
+        } catch (e) { /* FBX not available — using embedded */ }
+      }
+
+      // Start idle
+      playAnim('idle', 0, true);
+      console.log('[VRM] Ready — animations:', Object.keys(clips).join(', '));
+    });
+
+    // ══════════════════════════════════════════════════════════════
+    // RENDER LOOP
+    // ══════════════════════════════════════════════════════════════
+    const clock = new THREE.Clock();
+    renderer.setAnimationLoop(() => {
+      const dt = Math.min(clock.getDelta(), 0.05);
+      const t = clock.getElapsedTime();
+      if (!vrm) { renderer.render(scene, camera); return; }
+
+      // Breathing
+      vrm.scene.scale.set(1, 1 + Math.sin(t * 1.5) * 0.003, 1);
+
+      // Blinking
+      blinkTimer += dt;
+      if (!blinking && blinkTimer >= nextBlink) { blinking = true; blinkPhase = 0; }
+      if (blinking) {
+        blinkPhase += dt * 10;
+        if (blinkPhase < 0.5) setExpression('blink', blinkPhase * 2);
+        else if (blinkPhase < 1.5) setExpression('blink', Math.max(0, 1 - (blinkPhase - 0.5)));
+        else { setExpression('blink', 0); blinking = false; blinkTimer = 0; nextBlink = 2 + Math.random() * 4; }
+      }
+
+      // Gaze
+      gazeTimer += dt;
+      if (gazeTimer >= nextGazeShift) {
+        gazeTargetX = (Math.random() - 0.5) * 0.06;
+        gazeTargetZ = (Math.random() - 0.5) * 0.03;
+        gazeTimer = 0; nextGazeShift = 1.5 + Math.random() * 3;
+      }
+      gazeCurrentX += (gazeTargetX - gazeCurrentX) * Math.min(dt * 3, 1);
+      gazeCurrentZ += (gazeTargetZ - gazeCurrentZ) * Math.min(dt * 3, 1);
+
+      // Mouth
+      mouthCurrent += (mouthTarget - mouthCurrent) * Math.min(dt * 12, 1);
+      setExpression('aa', mouthCurrent * 0.22);
+      setExpression('oh', mouthCurrent * 0.10);
+      setExpression('ih', mouthCurrent * 0.06);
+
+      // Emotions
+      const emo = EMOTION_MAP[currentEmotion] || EMOTION_MAP.neutral;
+      for (const k of ['happy', 'angry', 'sad', 'surprised']) {
+        emotionSmooth[k] += ((emo[k] || 0) - emotionSmooth[k]) * dt * 3;
+        setExpression(k, emotionSmooth[k]);
+      }
+
+      // Rim light
+      rimLight.color.lerp(new THREE.Color(MODE_COLORS[currentMode] || 0x445566), dt * 3);
+
+      // VRM update + AnimationMixer
+      vrm.update(dt);
+      if (mixer) mixer.update(dt);
+
+      // Head gaze additive (on top of animation)
+      if (vrm.humanoid) {
+        const head = vrm.humanoid.getNormalizedBoneNode('head');
+        if (head) {
+          const gq = new THREE.Quaternion().setFromEuler(new THREE.Euler(
+            gazeCurrentZ + (currentMode === 'speaking' ? Math.sin(t * 2.5) * 0.015 * mouthCurrent : 0),
+            0, gazeCurrentX,
+          ));
+          head.quaternion.multiply(gq);
+        }
+      }
+
+      // Auto-fidget
+      if (currentMode !== 'speaking') {
+        fidgetTimer += dt;
+        if (fidgetTimer >= nextFidget) {
+          const picks = ['nod', 'headShake', 'shrug', 'think', 'crossArms'].filter(n => actions[n]);
+          if (picks.length) playAnim(picks[Math.floor(Math.random() * picks.length)], 0.5, false);
+          fidgetTimer = 0; nextFidget = 15 + Math.random() * 15;
+        }
+      } else { fidgetTimer = 0; }
+
+      renderer.render(scene, camera);
+    });
+
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    // ── API ──────────────────────────────────────────────────────
+    window.setMode = (m) => { currentMode = m; };
+    window.setEmotion = (e) => { currentEmotion = e; };
+    window.setMouth = (v) => { mouthTarget = typeof v === 'number' ? v : 0; };
+    window.playAnimation = (name, fade = 0.5) => playAnim(name, fade, false);
+    window.getAnimations = () => Object.keys(clips);
+    window.setGesture = (name) => playAnim(name, 0.5, false);  // legacy
+
+  </script>
+</body>
+
+</html>

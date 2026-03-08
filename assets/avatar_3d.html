@@ -12,7 +12,7 @@
 
     body {
       overflow: hidden;
-      background: #1a1a2e;
+      background: transparent;
       width: 100vw;
       height: 100vh;
     }
@@ -79,15 +79,15 @@
           for (let i = 0; i < track.values.length; i += 4) {
             if (isVRM0) {
               newValues[i] = -track.values[i];     // -x
-              newValues[i+1] = track.values[i+1];   // y
-              newValues[i+2] = -track.values[i+2];  // -z  
-              newValues[i+3] = track.values[i+3];   // w
+              newValues[i + 1] = track.values[i + 1];   // y
+              newValues[i + 2] = -track.values[i + 2];  // -z  
+              newValues[i + 3] = track.values[i + 3];   // w
             } else {
               // VRM 1.0: convert from Mixamo coordinate space
               newValues[i] = track.values[i];       // x
-              newValues[i+1] = track.values[i+1];   // y
-              newValues[i+2] = track.values[i+2];   // z
-              newValues[i+3] = track.values[i+3];   // w
+              newValues[i + 1] = track.values[i + 1];   // y
+              newValues[i + 2] = track.values[i + 2];   // z
+              newValues[i + 3] = track.values[i + 3];   // w
             }
           }
           tracks.push(new THREE.QuaternionKeyframeTrack(
@@ -99,11 +99,11 @@
           const newValues = new Float32Array(track.values.length);
           for (let i = 0; i < track.values.length; i += 3) {
             newValues[i] = track.values[i] * scale;     // x
-            newValues[i+1] = track.values[i+1] * scale; // y
-            newValues[i+2] = track.values[i+2] * scale; // z
+            newValues[i + 1] = track.values[i + 1] * scale; // y
+            newValues[i + 2] = track.values[i + 2] * scale; // z
             if (isVRM0) {
               newValues[i] = -newValues[i];   // flip x
-              newValues[i+2] = -newValues[i+2]; // flip z
+              newValues[i + 2] = -newValues[i + 2]; // flip z
             }
           }
           tracks.push(new THREE.VectorKeyframeTrack(
@@ -443,7 +443,7 @@
     document.body.appendChild(renderer.domElement);
 
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x1a1a2e);  // dark blue-black background
+    scene.background = null;  // transparent for stream overlay
     const camera = new THREE.PerspectiveCamera(32, window.innerWidth / window.innerHeight, 0.1, 50);
     const params = new URLSearchParams(window.location.search);
     const framing = params.get('framing') || 'bust';

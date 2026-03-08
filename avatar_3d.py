@@ -84,7 +84,7 @@ def _avatar_process(pipe_conn, project_root, width, height, title):
         frameless=True,
         on_top=True,
         transparent=True,
-        background_color='#00000000',
+        background_color='#000000',
     )
 
     def _command_listener():

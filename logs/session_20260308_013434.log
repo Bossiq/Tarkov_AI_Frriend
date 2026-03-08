@@ -1,0 +1,16 @@
+[01:34:35]  Initializing PMC Overwatch …
+[01:34:36]  [Dashboard] http://localhost:8420
+[01:34:36]  [Info] Twitch disabled (TWITCH_TOKEN not set)
+[01:34:37]  [Brain] Online (groq: llama-3.3-70b-versatile)
+[01:34:37]  [Brain] Warming up model …
+[01:34:39]  [Brain] Model ready (warm)
+[01:34:39]  [Screen] Capture active (safe mode — same as OBS)
+[01:34:39]  Input mode: Auto VAD
+[01:34:39]  [SFX] Sound effects active
+[01:34:57]  [Mic] Calibrating...
+[01:34:57]  [Screen] AI commentary active
+[01:34:57]  🔊 Calibrating mic — stay quiet for 1 second …
+[01:34:58]  🔊 Calibrated (threshold: 0.015)
+[01:34:58]  [Mic] Listening active -- speak to interact.
+[01:35:00]  [Avatar] 3D avatar unavailable — using sprites
+[01:35:00]  System ready. Click Start to begin.

@@ -11,6 +11,7 @@ main loop always progresses and timeout checks fire reliably.
 import logging
 import os
 import queue
+import tempfile
 import threading
 import time
 from collections import deque
@@ -1066,7 +1067,7 @@ class VoiceInput:
 
         # Save captured audio for transcription
         audio = np.concatenate(self._bargein_audio, axis=0)
-        path = "bargein_capture.wav"
+        path = os.path.join(tempfile.gettempdir(), "pmc_bargein_capture.wav")
         sf.write(path, audio, self.samplerate)
         duration = len(audio) / self.samplerate
         logger.info("Barge-in audio: %.1fs -> %s", duration, path)

@@ -19,6 +19,7 @@ All heavy work (mic calibration, model loading, transcription, TTS)
 runs on daemon threads.
 """
 
+import atexit
 import asyncio
 import logging
 import os
@@ -111,6 +112,7 @@ class PMCOverwatch:
         self._brain: Optional[Brain] = None
         self._twitch_bot: Optional[TwitchBot] = None
         self._running = False
+        self._toggle_lock = threading.Lock()  # prevents double listen threads
         self._barge_in_occurred = False  # set after barge-in to skip onset detection
 
         # Hook up GUI callbacks
@@ -130,8 +132,8 @@ class PMCOverwatch:
         """Load the AI brain on a background thread (avoids GUI freeze)."""
         try:
             self._brain = Brain()
-            engine = self._brain._engine
-            model = self._brain._model
+            engine = getattr(self._brain, '_engine', 'unknown')
+            model = getattr(self._brain, '_model', 'unknown')
             self._gui.log(f"[Brain] Online ({engine}: {model})")
             self._gui.log("[Brain] Warming up model …")
             self._brain._warmup()

@@ -283,15 +283,23 @@ class Brain:
 
     # -- Failover chain --------------------------------------------------------
     def _next_engine(self, current: str) -> Optional[str]:
-        """Get the next available engine in the failover chain."""
+        """Get the next available engine in the failover chain.
+        
+        Excludes the current (failed) engine and any engine on cooldown.
+        """
         chain = self._ENGINE_CHAIN
-        try:
-            idx = chain.index(current)
-        except ValueError:
-            idx = -1
-        for eng in chain[idx + 1:] + chain[:idx]:
-            if eng != current and self._engines.get(eng):
-                return eng
+        now = time.monotonic()
+        for eng in chain:
+            if eng == current:
+                continue
+            if not self._engines.get(eng):
+                continue
+            # Respect cooldown timers
+            if eng == "groq" and now < self._groq_cooldown_until:
+                continue
+            if eng == "gemini" and now < self._gemini_cooldown_until:
+                continue
+            return eng
         return None
 
     def _switch_engine(self, target: str, cooldown_source: Optional[str] = None,
@@ -559,11 +567,6 @@ class Brain:
     )
 
     _VISION_COOLDOWN = 10.0  # seconds between vision requests
-
-    def __init_vision__(self) -> None:
-        """Initialize vision-related state (called from __init__)."""
-        self._last_vision_time: float = 0.0
-        self._last_vision_result: str = ""
 
     def analyze_screen(self, frame_path: str) -> Optional[str]:
         """Analyze a gameplay screenshot via Gemini Vision.

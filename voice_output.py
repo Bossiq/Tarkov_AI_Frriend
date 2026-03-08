@@ -605,7 +605,7 @@ class VoiceOutput:
         if self._kokoro is not None:
             self._speak_kokoro(clean)
         else:
-            self._speak_say(clean)
+            self._speak_say(clean, lang)
 
     def set_language_hint(self, lang: str) -> None:
         """Set language hint from Whisper STT for the upcoming response."""

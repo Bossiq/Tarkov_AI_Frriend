@@ -353,13 +353,16 @@ async function loadWeapon() {
 // LOAD MIXAMO ANIMATIONS + EMBEDDED WALK
 // ═══════════════════════════════════════════════════════════════════
 const ANIM_FILES = {
-  'idle':   '/assets/animations/idle.fbx',
-  'walk':   '/assets/animations/walk.fbx',
-  'wave':   '/assets/animations/wave.fbx',
-  'clap':   '/assets/animations/clap.fbx',
-  'think':  '/assets/animations/think.fbx',
-  'shrug':  '/assets/animations/shrug.fbx',
-  'dance':  '/assets/animations/dance.fbx',
+  'idle':               '/assets/animations/idle.fbx',
+  'rifle_walk':         '/assets/animations/rifle_walk.fbx',
+  'rifle_crouch_walk':  '/assets/animations/rifle_crouch_walk.fbx',
+  'rifle_walk_to_stop': '/assets/animations/rifle_walk_to_stop.fbx',
+  'walking':            '/assets/animations/walking.fbx',
+  'wave':               '/assets/animations/wave.fbx',
+  'clap':               '/assets/animations/clap.fbx',
+  'think':              '/assets/animations/think.fbx',
+  'shrug':              '/assets/animations/shrug.fbx',
+  'dance':              '/assets/animations/dance.fbx',
 };
 
 // Programmatic walk animation (no FBX needed)
@@ -474,13 +477,35 @@ async function loadAnimations() {
     }
   }
 
-  // Create embedded walk animation (no FBX download needed)
-  if (!animations['walk']) {
+  // Resolve best walk animation: rifle_walk > walking > embedded fallback
+  if (animations['rifle_walk']) {
+    animations['walk'] = animations['rifle_walk'];
+    actions['walk'] = actions['rifle_walk'];
+    console.log('[3D] Walk: using rifle_walk (rifle hold pose)');
+  } else if (animations['walking']) {
+    animations['walk'] = animations['walking'];
+    actions['walk'] = actions['walking'];
+    console.log('[3D] Walk: using walking (generic)');
+  } else if (!animations['walk']) {
     const walkClip = createWalkAnimation();
     animations['walk'] = walkClip;
     actions['walk'] = mixer.clipAction(walkClip);
     count++;
-    console.log('[3D] Walk animation created (embedded)');
+    console.log('[3D] Walk: using embedded fallback');
+  }
+
+  // Alias walk_to_stop if rifle version available
+  if (animations['rifle_walk_to_stop']) {
+    animations['walk_to_stop'] = animations['rifle_walk_to_stop'];
+    actions['walk_to_stop'] = actions['rifle_walk_to_stop'];
+    console.log('[3D] Walk-to-stop transition available');
+  }
+
+  // Alias crouch walk
+  if (animations['rifle_crouch_walk']) {
+    animations['crouch'] = animations['rifle_crouch_walk'];
+    actions['crouch'] = actions['rifle_crouch_walk'];
+    console.log('[3D] Crouch walk available');
   }
 
   console.log(`[3D] ${count} animations loaded`);
@@ -615,7 +640,7 @@ function updateMovement() {
     // Walking
     if (!state.isWalking) {
       state.isWalking = true;
-      playAnim('walk', 0.3, true); // Always available (embedded fallback)
+      playAnim('walk', 0.3, true); // rifle_walk > walking > embedded
     }
     // Move toward target
     const step = Math.sign(dx) * CONFIG.moveSpeed;
@@ -633,7 +658,12 @@ function updateMovement() {
     // Arrived at target
     if (state.isWalking) {
       state.isWalking = false;
-      playAnim('idle', 0.4, true);
+      // Smooth stop: play walk-to-stop transition if available
+      if (actions['walk_to_stop']) {
+        playAnim('walk_to_stop', 0.3, false); // plays once then returns to idle
+      } else {
+        playAnim('idle', 0.4, true);
+      }
     }
   }
 
@@ -776,6 +806,13 @@ function triggerAnimation(anim) {
       break;
     case 'shrug':
       playAnim('shrug', 0.4, false);
+      break;
+    case 'crouch':
+      if (actions['crouch']) {
+        playAnim('crouch', 0.4, false);
+      } else {
+        playAnim('idle', 0.4, true);
+      }
       break;
     case 'die':
       // No die animation yet — do shrug as placeholder

@@ -20,3 +20,13 @@ fastapi
 uvicorn
 noisereduce
 scipy
+
+# ── Neural VAD (Silero) ──
+torch
+torchaudio
+silero-vad
+
+# ── Local Neural TTS (Kokoro) ──
+kokoro-onnx
+onnxruntime
+huggingface-hub

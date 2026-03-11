@@ -297,6 +297,7 @@ async function loadWeapon() {
   return new Promise((resolve, reject) => {
     gltfLoader.load(CONFIG.weaponGLB, (gltf) => {
       weaponMesh = gltf.scene;
+      window._weaponMesh = weaponMesh;  // expose for debug panel
       weaponMesh.scale.setScalar(CONFIG.weaponScale);
       weaponMesh.position.set(
         CONFIG.weaponOffset.x,
@@ -988,5 +989,82 @@ window.mascot = {
 };
 
 </script>
+
+<!-- ── RPK Debug Panel (press D to toggle) ──────────────────────── -->
+<div id="rpkDebug" style="
+  display: none; position: fixed; top: 10px; right: 10px;
+  background: rgba(0,0,0,0.85); color: #0f0; font-family: monospace;
+  font-size: 12px; padding: 12px; border-radius: 8px; border: 1px solid #333;
+  z-index: 9999; min-width: 260px;
+">
+  <div style="margin-bottom: 8px; font-weight: bold; color: #0df;">⚙ RPK Weapon Tuner</div>
+  <div id="rpkSliders"></div>
+  <div style="margin-top: 8px; color: #888; font-size: 10px;">Press D to hide • Values logged to console</div>
+</div>
+<script>
+(function() {
+  const panel = document.getElementById('rpkDebug');
+  const container = document.getElementById('rpkSliders');
+  let visible = false;
+
+  const params = {
+    'Pos X':  { key: 'px', min: -20, max: 20, step: 0.5, val: CONFIG.weaponOffset.x },
+    'Pos Y':  { key: 'py', min: -20, max: 20, step: 0.5, val: CONFIG.weaponOffset.y },
+    'Pos Z':  { key: 'pz', min: -20, max: 20, step: 0.5, val: CONFIG.weaponOffset.z },
+    'Rot X':  { key: 'rx', min: -3.14, max: 3.14, step: 0.05, val: CONFIG.weaponRotation.x },
+    'Rot Y':  { key: 'ry', min: -3.14, max: 3.14, step: 0.05, val: CONFIG.weaponRotation.y },
+    'Rot Z':  { key: 'rz', min: -3.14, max: 3.14, step: 0.05, val: CONFIG.weaponRotation.z },
+    'Scale':  { key: 'sc', min: 1, max: 100, step: 1, val: CONFIG.weaponScale },
+  };
+
+  for (const [label, p] of Object.entries(params)) {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex; align-items:center; gap:6px; margin: 3px 0;';
+    row.innerHTML = `
+      <span style="width:50px">${label}</span>
+      <input type="range" min="${p.min}" max="${p.max}" step="${p.step}" value="${p.val}"
+             id="rpk_${p.key}" style="flex:1; accent-color:#0df;">
+      <span id="rpkV_${p.key}" style="width:45px; text-align:right">${p.val.toFixed(2)}</span>
+    `;
+    container.appendChild(row);
+
+    document.getElementById(`rpk_${p.key}`).addEventListener('input', (e) => {
+      const v = parseFloat(e.target.value);
+      document.getElementById(`rpkV_${p.key}`).textContent = v.toFixed(2);
+      applyWeaponTune();
+    });
+  }
+
+  function applyWeaponTune() {
+    // Find the weapon mesh in the scene
+    const wpn = window._weaponMesh;
+    if (!wpn) return;
+
+    const px = parseFloat(document.getElementById('rpk_px').value);
+    const py = parseFloat(document.getElementById('rpk_py').value);
+    const pz = parseFloat(document.getElementById('rpk_pz').value);
+    const rx = parseFloat(document.getElementById('rpk_rx').value);
+    const ry = parseFloat(document.getElementById('rpk_ry').value);
+    const rz = parseFloat(document.getElementById('rpk_rz').value);
+    const sc = parseFloat(document.getElementById('rpk_sc').value);
+
+    wpn.position.set(px, py, pz);
+    wpn.rotation.set(rx, ry, rz);
+    wpn.scale.setScalar(sc);
+
+    console.log(`weaponOffset: { x: ${px}, y: ${py}, z: ${pz} }`);
+    console.log(`weaponRotation: { x: ${rx.toFixed(2)}, y: ${ry.toFixed(2)}, z: ${rz.toFixed(2)} }`);
+    console.log(`weaponScale: ${sc}`);
+  }
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'd' || e.key === 'D') {
+      visible = !visible;
+      panel.style.display = visible ? 'block' : 'none';
+    }
+  });
+})();
+</script>
 </body>
 </html>
+

@@ -1,11 +1,17 @@
 """
-Voice input — mic capture with adaptive VAD + local Whisper STT.
+Voice input — mic capture with Silero VAD + local Whisper STT.
 
 Uses CALLBACK-BASED audio capture to prevent blocking.
 The `stream.read()` approach can block indefinitely when mic hardware
 stalls after TTS playback. This version uses a callback that puts
 chunks into a queue, with `queue.get(timeout=0.2)` ensuring the
 main loop always progresses and timeout checks fire reliably.
+
+VAD Strategy (as of March 2026):
+  • ONSET detection: Silero VAD neural model (snakers4/silero-vad)
+    — 512-sample windows, ~1ms inference, far superior to RMS-based
+  • END-OF-SPEECH: RMS energy drop detection (simpler, faster)
+  • Fallback: if Silero is unavailable, uses the legacy RMS onset logic
 """
 
 import logging
@@ -24,6 +30,46 @@ import soundfile as sf
 
 logger = logging.getLogger(__name__)
 
+# ── Silero VAD (lazy-loaded, neural speech detection) ─────────────────
+_silero_model = None
+_silero_lock = threading.Lock()
+
+
+def _get_silero_model():
+    """Lazy-load the Silero VAD model (thread-safe, singleton)."""
+    global _silero_model
+    if _silero_model is not None:
+        return _silero_model
+    with _silero_lock:
+        if _silero_model is not None:
+            return _silero_model
+        try:
+            from silero_vad import load_silero_vad
+            _silero_model = load_silero_vad()
+            logger.info("Silero VAD loaded (neural onset detection)")
+            return _silero_model
+        except Exception:
+            logger.warning("Silero VAD unavailable — using legacy RMS onset")
+            return None
+
+
+def _silero_speech_prob(model, chunk_16k: np.ndarray) -> float:
+    """Get speech probability [0.0-1.0] from Silero for a 512-sample window.
+
+    Silero requires exactly 512 samples at 16kHz.  If the chunk is larger,
+    we take the last 512 samples (most recent audio).
+    """
+    import torch
+    if len(chunk_16k) < 512:
+        return 0.0
+    # Take last 512 samples
+    window = chunk_16k[-512:].flatten()
+    tensor = torch.from_numpy(window).float()
+    with torch.no_grad():
+        prob = model(tensor, 16000).item()
+    return prob
+
+
 # ── Constants ────────────────────────────────────────────────────────
 _SAMPLERATE = 16_000
 _CHANNELS = 1
@@ -31,8 +77,8 @@ _CHUNK_SECONDS = 0.1
 _END_OF_SPEECH_SILENCE = 1.2     # End-of-speech silence (give user time to breathe/pause)
 _MAX_RECORDING_SECONDS = 30      # Allow longer utterances
 _CALIBRATION_SECONDS = 1.0
-_NOISE_MULTIPLIER = 2.5          # Onset detection sensitivity
-_MIN_SPEECH_CHUNKS = 3           # Prevent false starts from clicks/squeaks/coughs
+_NOISE_MULTIPLIER = 2.5          # Legacy RMS onset sensitivity (fallback)
+_MIN_SPEECH_CHUNKS = 3           # Consecutive speech chunks before recording
 _PRE_BUFFER_CHUNKS = 10          # 1s of pre-speech audio (captures first syllable)
 _SILENCE_FACTOR = 0.15           # End-of-speech = 15% of peak RMS
 _QUEUE_TIMEOUT = 0.2             # Never block longer than 200ms
@@ -41,8 +87,10 @@ _MIN_SPEECH_SECONDS = 0.8        # Ignore speech shorter than this
 _TRIM_TRAILING_SILENCE = True    # Trim dead air from end of recording
 _DEFAULT_WHISPER_MODEL = "small"
 _DEFAULT_COMPUTE_TYPE = "int8"
-_SPECTRAL_FLATNESS_THRESHOLD = 0.85  # Reject chunks with flat spectrum (noise/squeaks)
+_SPECTRAL_FLATNESS_THRESHOLD = 0.85  # Legacy: reject flat-spectrum noise
 _POST_TTS_COOLDOWN = 0.5        # Seconds to ignore audio after TTS stops
+_SILERO_ONSET_THRESHOLD = 0.5   # Silero speech probability for onset (0.0-1.0)
+_SILERO_BARGEIN_THRESHOLD = 0.7 # Higher bar for barge-in (avoid TTS echo triggers)
 
 # Common Whisper hallucinations to reject
 _WHISPER_HALLUCINATIONS = {
@@ -76,7 +124,7 @@ def _spectral_flatness(chunk: np.ndarray) -> float:
 
 
 class VoiceInput:
-    """Mic capture with adaptive VAD and local Whisper transcription."""
+    """Mic capture with Silero VAD neural onset detection + Whisper STT."""
 
     def __init__(
         self,
@@ -102,6 +150,14 @@ class VoiceInput:
         self.device: Optional[int] = device
         self._bargein_frames: list[np.ndarray] = []
         self._bargein_detected = threading.Event()
+
+        # ── Silero VAD (loaded in background) ──────────────────────
+        self._silero_model = None
+        threading.Thread(target=self._load_silero, name="SileroLoad", daemon=True).start()
+
+    def _load_silero(self):
+        """Load Silero VAD model in a background thread."""
+        self._silero_model = _get_silero_model()
 
     # ── Device enumeration & switching ────────────────────────────────
     @staticmethod
@@ -304,20 +360,25 @@ class VoiceInput:
                     rms_window.append(raw_rms)
                     smoothed_rms = float(np.mean(rms_window))
 
-                    # ── ONSET: use RAW RMS (no averaging delay) ───────
-                    if raw_rms > (self._threshold or 0.015):
-                        # Spectral flatness check ONLY during onset detection
-                        # (not while already recording — fricatives like 's','sh'
-                        #  have flat spectra and would break mid-speech)
-                        if not is_recording:
-                            flatness = _spectral_flatness(chunk)
-                            if flatness > _SPECTRAL_FLATNESS_THRESHOLD:
-                                # Noise spike, not speech — don't count it,
-                                # but don't reset the counter either (speech
-                                # can have brief noisy frames between words)
-                                pre_buffer.append(chunk.copy())
-                                continue
+                    # ── ONSET: Silero VAD (neural) with RMS fallback ──
+                    # Silero gives a speech probability [0.0-1.0].
+                    # If unavailable, fall back to legacy RMS + spectral flatness.
+                    is_speech_chunk = False
+                    if self._silero_model is not None:
+                        # Neural onset: much more accurate than RMS
+                        prob = _silero_speech_prob(self._silero_model, chunk)
+                        is_speech_chunk = prob > _SILERO_ONSET_THRESHOLD
+                    else:
+                        # Legacy fallback: RMS + spectral flatness
+                        if raw_rms > (self._threshold or 0.015):
+                            if not is_recording:
+                                flatness = _spectral_flatness(chunk)
+                                if flatness > _SPECTRAL_FLATNESS_THRESHOLD:
+                                    pre_buffer.append(chunk.copy())
+                                    continue
+                            is_speech_chunk = True
 
+                    if is_speech_chunk:
                         consecutive_loud += 1
                         silence_start = None
                         abs_silence_start = None
@@ -325,9 +386,10 @@ class VoiceInput:
                         if not is_recording:
                             pre_buffer.append(chunk.copy())
                             if consecutive_loud >= _MIN_SPEECH_CHUNKS:
+                                vad_label = "Silero" if self._silero_model else "RMS"
                                 logger.info(
-                                    "Speech detected (rms=%.4f, flatness=%.2f) — recording …",
-                                    raw_rms, flatness,
+                                    "Speech detected [%s] (rms=%.4f) — recording …",
+                                    vad_label, raw_rms,
                                 )
                                 is_recording = True
                                 recording_start = time.monotonic()

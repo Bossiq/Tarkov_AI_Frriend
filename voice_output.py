@@ -1,12 +1,14 @@
 """
 Voice Output — Multilingual TTS via edge-tts (Microsoft Neural Voices).
 
-Primary engine: edge-tts (neural voices for EN/RU/RO)
-Fallback: macOS `say` command
+Primary engine: edge-tts (neural voices for EN/RU/RO — best quality)
+Offline backup:  Kokoro TTS (local ONNX, 82M params, Apache 2.0)
+Last resort:     macOS `say` command
 
 Features:
+  * Microsoft Ava Multilingual Neural voice (flagship quality)
+  * Kokoro offline fallback when edge-tts unavailable
   * Auto language detection (Cyrillic → Russian, Romanian chars → Romanian)
-  * Neural female voices per language
   * Real-time amplitude callback for lip-sync animation
   * Text preprocessing for natural speech
 """
@@ -335,6 +337,12 @@ class VoiceOutput:
         except ImportError:
             logger.warning("edge-tts not installed -- falling back to macOS say")
 
+        # ── Kokoro TTS (local neural, primary engine) ─────────────
+        self._kokoro = None
+        self._kokoro_available = False
+        self._kokoro_voices: dict = {}  # voice_name → lang mapping
+        threading.Thread(target=self._load_kokoro, name="KokoroLoad", daemon=True).start()
+
     # ── Interrupt control ─────────────────────────────────────────────
     def was_interrupted(self) -> bool:
         """True if the last speak/speak_streamed was cut short by barge-in."""
@@ -410,6 +418,107 @@ class VoiceOutput:
             self._on_speak_end()
 
         return not interrupted
+
+    # ══════════════════════════════════════════════════════════════════
+    #  KOKORO TTS (LOCAL NEURAL — PRIMARY ENGINE)
+    # ══════════════════════════════════════════════════════════════════
+    def _load_kokoro(self) -> None:
+        """Load Kokoro ONNX model in background thread."""
+        import os
+        _base = os.path.dirname(os.path.abspath(__file__))
+        model_path = os.path.join(_base, "models", "kokoro", "onnx", "model.onnx")
+        voices_path = os.path.join(_base, "models", "kokoro", "voices.npz")
+
+        if not os.path.exists(model_path) or not os.path.exists(voices_path):
+            logger.info("Kokoro model not found at %s — skipping local TTS", model_path)
+            return
+
+        try:
+            from kokoro_onnx import Kokoro
+            t = time.time()
+            self._kokoro = Kokoro(model_path, voices_path)
+            available = self._kokoro.get_voices()
+            self._kokoro_available = True
+            logger.info(
+                "Kokoro TTS loaded (%.2fs, %d voices: %s)",
+                time.time() - t, len(available), ", ".join(available),
+            )
+        except Exception:
+            logger.warning("Kokoro TTS failed to load — will use edge-tts")
+            self._kokoro = None
+
+    def _speak_kokoro(self, text: str, lang: str) -> bool:
+        """Synthesize and play speech via Kokoro local neural TTS.
+
+        Returns True on success, False to fall through to edge-tts.
+        """
+        if not self._kokoro_available or self._kokoro is None:
+            return False
+
+        try:
+            # Voice selection  (Kokoro voice naming: af_=American female,
+            # am_=American male, bf_=British female, bm_=British male)
+            voice_name = self._voice  # from TTS_VOICE env
+            available = self._kokoro.get_voices()
+
+            # If configured voice not in Kokoro, pick best match
+            if voice_name not in available:
+                # Prefer am_adam for male, af_bella for female
+                for fallback in ["am_adam", "af_bella", "am_michael", "af_nicole"]:
+                    if fallback in available:
+                        voice_name = fallback
+                        break
+                else:
+                    voice_name = available[0] if available else "af_bella"
+
+            # Kokoro lang codes: en-us, en-gb, fr-fr, ja, ko, cmn
+            kokoro_lang = "en-us"
+            if lang == "en":
+                kokoro_lang = "en-us"
+            elif lang == "fr":
+                kokoro_lang = "fr-fr"
+            # Kokoro doesn't support RO/RU natively — fall through to edge-tts
+            elif lang in ("ro", "ru"):
+                logger.debug("Kokoro: no %s support, falling to edge-tts", lang)
+                return False
+
+            logger.debug("Kokoro: voice=%s lang=%s text=%s", voice_name, kokoro_lang, text[:60])
+
+            # Synthesize with speed dtype fix (kokoro-onnx v0.4.7 bug)
+            voice_style = self._kokoro.get_voice_style(voice_name)
+            phonemes = self._kokoro.tokenizer.phonemize(text, kokoro_lang)
+
+            # Split into batches like the library does
+            from kokoro_onnx import MAX_PHONEME_LENGTH, SAMPLE_RATE, trim_audio
+            batched = self._kokoro._split_phonemes(phonemes)
+
+            audio_parts = []
+            for ph in batched:
+                if len(ph) > MAX_PHONEME_LENGTH:
+                    ph = ph[:MAX_PHONEME_LENGTH]
+                tokens = np.array(self._kokoro.tokenizer.tokenize(ph), dtype=np.int64)
+                voice_slice = voice_style[len(tokens)]
+                tokens_input = np.array([[0, *tokens, 0]], dtype=np.int64)
+                inputs = {
+                    "input_ids": tokens_input,
+                    "style": np.array(voice_slice, dtype=np.float32),
+                    "speed": np.array([self._speed], dtype=np.float32),  # FIX: float32
+                }
+                raw_audio = self._kokoro.sess.run(None, inputs)[0]
+                trimmed, _ = trim_audio(raw_audio)
+                audio_parts.append(trimmed)
+
+            if not audio_parts:
+                return False
+
+            audio = np.concatenate(audio_parts).astype(np.float32)
+            audio = self._postprocess_audio(audio, SAMPLE_RATE)
+            self._play_with_amplitude(audio, SAMPLE_RATE)
+            return True
+
+        except Exception:
+            logger.exception("Kokoro TTS synthesis failed")
+            return False
 
     # ══════════════════════════════════════════════════════════════════
     #  EDGE-TTS SYNTHESIS
@@ -566,7 +675,11 @@ class VoiceOutput:
             self._gui_callback(f"[PMC] {text}")
 
         lang = _detect_language(text)
+
+        # Fallback chain: edge-tts (cloud, best quality) → Kokoro (local) → macOS say
         if self._edge_available and self._speak_edge(clean, lang):
+            return
+        if self._kokoro_available and self._speak_kokoro(clean, lang):
             return
 
         self._speak_say(clean, lang)
@@ -621,8 +734,11 @@ class VoiceOutput:
                 logger.info("Response language locked: %s", lang)
 
             spoke = False
+            # Fallback chain: edge-tts (cloud, best) → Kokoro (local) → macOS say
             if self._edge_available:
                 spoke = self._speak_edge(clean, lang)
+            if not spoke and self._kokoro_available:
+                spoke = self._speak_kokoro(clean, lang)
             if not spoke:
                 self._speak_say(clean, lang)
 

@@ -1,546 +1,315 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>PMC Overwatch — Dashboard</title>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PMC Overwatch — Control Panel</title>
+    <style>
+        :root {
+            --bg: #0a0e17;
+            --surface: #131a2b;
+            --border: #1e2a42;
+            --accent: #00d4ff;
+            --accent2: #7c3aed;
+            --green: #22c55e;
+            --yellow: #eab308;
+            --red: #ef4444;
+            --text: #e2e8f0;
+            --muted: #64748b;
+        }
 
-    :root {
-      --bg: #050810;
-      --card: #0d1117;
-      --surface: #161b22;
-      --glass: #1c2333;
-      --green: #3fb950;
-      --red: #f85149;
-      --amber: #d29922;
-      --cyan: #58a6ff;
-      --holo: #00f0ff;
-      --text: #f0f6fc;
-      --text2: #8b949e;
-      --muted: #30363d;
-      --border: #21262d;
-      --accent: #1f6feb;
-    }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
 
-    body {
-      background: var(--bg);
-      color: var(--text);
-      font-family: 'Inter', system-ui, sans-serif;
-      line-height: 1.6;
-      min-height: 100vh;
-    }
+        body {
+            font-family: 'Inter', 'SF Pro Display', -apple-system, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+        }
 
-    .container {
-      max-width: 900px;
-      margin: 0 auto;
-      padding: 24px;
-    }
+        .header {
+            background: linear-gradient(135deg, var(--surface), #0d1424);
+            border-bottom: 1px solid var(--border);
+            padding: 1rem 2rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
 
-    /* Header */
-    .header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 20px 28px;
-      background: var(--card);
-      border: 1px solid var(--border);
-      border-radius: 16px;
-      margin-bottom: 20px;
-    }
+        .header h1 {
+            font-size: 1.4rem;
+            font-weight: 700;
+            background: linear-gradient(90deg, var(--accent), var(--accent2));
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        }
 
-    .header h1 {
-      font-size: 22px;
-      font-weight: 700;
-      background: linear-gradient(135deg, var(--holo), var(--cyan));
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-    }
+        .header .status-badge {
+            display: flex; align-items: center; gap: 0.5rem;
+            font-size: 0.85rem; color: var(--green);
+        }
+        .header .status-badge .dot {
+            width: 8px; height: 8px; border-radius: 50%;
+            background: var(--green); animation: pulse 2s infinite;
+        }
 
-    .header .subtitle {
-      font-size: 12px;
-      color: var(--text2);
-      margin-top: 2px;
-    }
+        @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
 
-    .status-badge {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: 8px 16px;
-      border-radius: 10px;
-      background: var(--surface);
-      font-size: 13px;
-      font-weight: 500;
-    }
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1.2rem;
+            padding: 1.5rem 2rem;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
 
-    .status-dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: var(--green);
-      animation: pulse 2s infinite;
-    }
+        .card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 1.2rem;
+            transition: border-color 0.3s;
+        }
+        .card:hover { border-color: var(--accent); }
 
-    @keyframes pulse {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0.5; }
-    }
+        .card h2 {
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--muted);
+            margin-bottom: 0.8rem;
+        }
 
-    /* Cards */
-    .card {
-      background: var(--card);
-      border: 1px solid var(--border);
-      border-radius: 16px;
-      padding: 24px;
-      margin-bottom: 16px;
-      transition: border-color 0.2s;
-    }
+        .stat-row {
+            display: flex; justify-content: space-between;
+            align-items: center; padding: 0.4rem 0;
+            border-bottom: 1px solid rgba(255,255,255,0.04);
+        }
+        .stat-row:last-child { border-bottom: none; }
+        .stat-label { color: var(--muted); font-size: 0.85rem; }
+        .stat-value {
+            font-weight: 600; font-size: 0.95rem;
+            font-variant-numeric: tabular-nums;
+        }
 
-    .card:hover { border-color: var(--muted); }
+        .mode-idle { color: var(--muted); }
+        .mode-listening { color: var(--accent); }
+        .mode-thinking { color: var(--yellow); }
+        .mode-speaking { color: var(--green); }
 
-    .card-title {
-      font-size: 15px;
-      font-weight: 600;
-      color: var(--holo);
-      margin-bottom: 16px;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
+        .amplitude-bar {
+            width: 100%; height: 6px; background: rgba(255,255,255,0.06);
+            border-radius: 3px; overflow: hidden;
+        }
+        .amplitude-fill {
+            height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent2));
+            transition: width 0.05s; width: 0%;
+            border-radius: 3px;
+        }
 
-    /* Grid */
-    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-    @media (max-width: 700px) { .grid { grid-template-columns: 1fr; } }
+        .log-container {
+            grid-column: 1 / -1;
+            max-height: 300px;
+            overflow-y: auto;
+            font-family: 'JetBrains Mono', 'Menlo', monospace;
+            font-size: 0.78rem;
+            line-height: 1.6;
+            color: var(--muted);
+        }
+        .log-container .log-entry { padding: 2px 0; }
+        .log-container .log-user { color: var(--accent); }
+        .log-container .log-ai { color: var(--green); }
+        .log-container .log-system { color: var(--yellow); }
 
-    /* Form elements */
-    .field {
-      margin-bottom: 14px;
-    }
+        .btn {
+            background: linear-gradient(135deg, var(--accent), var(--accent2));
+            color: #fff; border: none; padding: 0.5rem 1.2rem;
+            border-radius: 8px; font-size: 0.85rem; font-weight: 600;
+            cursor: pointer; transition: opacity 0.2s, transform 0.1s;
+        }
+        .btn:hover { opacity: 0.9; }
+        .btn:active { transform: scale(0.97); }
+        .btn-danger {
+            background: linear-gradient(135deg, var(--red), #b91c1c);
+        }
+        .btn-row { display: flex; gap: 0.6rem; margin-top: 0.5rem; }
 
-    .field label {
-      display: block;
-      font-size: 12px;
-      font-weight: 500;
-      color: var(--text2);
-      margin-bottom: 5px;
-    }
+        .subtitle-box {
+            grid-column: 1 / -1;
+            text-align: center; font-size: 1.1rem;
+            padding: 1rem; min-height: 3rem;
+            color: var(--text); font-style: italic;
+            opacity: 0.8;
+        }
 
-    .field input, .field select {
-      width: 100%;
-      padding: 10px 14px;
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      background: var(--glass);
-      color: var(--text);
-      font-family: 'Inter', sans-serif;
-      font-size: 13px;
-      outline: none;
-      transition: border-color 0.2s;
-    }
-
-    .field input:focus, .field select:focus {
-      border-color: var(--accent);
-    }
-
-    .field input[type="range"] {
-      padding: 0;
-      background: transparent;
-      border: none;
-      accent-color: var(--holo);
-    }
-
-    /* Buttons */
-    .btn {
-      padding: 10px 20px;
-      border: none;
-      border-radius: 10px;
-      font-family: 'Inter', sans-serif;
-      font-size: 13px;
-      font-weight: 600;
-      cursor: pointer;
-      transition: all 0.2s;
-    }
-
-    .btn-primary {
-      background: var(--accent);
-      color: white;
-    }
-
-    .btn-primary:hover { background: #388bfd; }
-
-    .btn-danger {
-      background: var(--red);
-      color: white;
-    }
-
-    .btn-danger:hover { opacity: 0.85; }
-
-    .btn-outline {
-      background: transparent;
-      color: var(--text2);
-      border: 1px solid var(--border);
-    }
-
-    .btn-outline:hover {
-      border-color: var(--accent);
-      color: var(--text);
-    }
-
-    .btn-row {
-      display: flex;
-      gap: 10px;
-      margin-top: 16px;
-    }
-
-    /* Log viewer */
-    .log-viewer {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 14px;
-      font-family: 'Cascadia Code', 'Fira Code', monospace;
-      font-size: 11px;
-      color: var(--text2);
-      height: 220px;
-      overflow-y: auto;
-      white-space: pre-wrap;
-      word-break: break-word;
-      line-height: 1.7;
-    }
-
-    .log-viewer::-webkit-scrollbar { width: 6px; }
-    .log-viewer::-webkit-scrollbar-track { background: transparent; }
-    .log-viewer::-webkit-scrollbar-thumb { background: var(--muted); border-radius: 3px; }
-
-    /* Status grid */
-    .stat-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
-      gap: 12px;
-    }
-
-    .stat-item {
-      background: var(--surface);
-      border-radius: 12px;
-      padding: 14px;
-      text-align: center;
-    }
-
-    .stat-value {
-      font-size: 20px;
-      font-weight: 700;
-      color: var(--holo);
-    }
-
-    .stat-label {
-      font-size: 11px;
-      color: var(--text2);
-      margin-top: 4px;
-    }
-
-    /* Toggle switch */
-    .toggle {
-      position: relative;
-      display: inline-block;
-      width: 44px;
-      height: 24px;
-    }
-
-    .toggle input { opacity: 0; width: 0; height: 0; }
-
-    .toggle .slider {
-      position: absolute;
-      inset: 0;
-      background: var(--muted);
-      border-radius: 12px;
-      transition: 0.3s;
-      cursor: pointer;
-    }
-
-    .toggle .slider::before {
-      content: '';
-      position: absolute;
-      width: 18px;
-      height: 18px;
-      left: 3px;
-      bottom: 3px;
-      background: white;
-      border-radius: 50%;
-      transition: 0.3s;
-    }
-
-    .toggle input:checked + .slider { background: var(--green); }
-    .toggle input:checked + .slider::before { transform: translateX(20px); }
-
-    .toggle-row {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 8px 0;
-    }
-
-    .toggle-label {
-      font-size: 13px;
-      color: var(--text);
-    }
-
-    /* Toast notification */
-    .toast {
-      position: fixed;
-      top: 20px;
-      right: 20px;
-      padding: 12px 20px;
-      border-radius: 10px;
-      font-size: 13px;
-      font-weight: 500;
-      z-index: 1000;
-      transform: translateX(120%);
-      transition: transform 0.3s ease;
-    }
-
-    .toast.show { transform: translateX(0); }
-    .toast.success { background: var(--green); color: white; }
-    .toast.error { background: var(--red); color: white; }
-
-    .footer {
-      text-align: center;
-      padding: 20px;
-      font-size: 11px;
-      color: var(--muted);
-    }
-  </style>
+        .emotion-badge {
+            display: inline-block;
+            padding: 0.2rem 0.7rem;
+            background: rgba(0, 212, 255, 0.1);
+            border: 1px solid rgba(0, 212, 255, 0.3);
+            border-radius: 20px;
+            font-size: 0.85rem;
+        }
+    </style>
 </head>
 <body>
-  <div class="container">
-    <!-- Header -->
     <div class="header">
-      <div>
         <h1>⚡ PMC Overwatch</h1>
-        <div class="subtitle">AI Companion Dashboard</div>
-      </div>
-      <div class="status-badge" id="statusBadge">
-        <div class="status-dot" id="statusDot"></div>
-        <span id="statusText">Connecting...</span>
-      </div>
+        <div class="status-badge">
+            <span class="dot" id="statusDot"></span>
+            <span id="statusText">Connecting...</span>
+        </div>
     </div>
 
-    <!-- Status -->
-    <div class="card">
-      <div class="card-title">📊 System Status</div>
-      <div class="stat-grid">
-        <div class="stat-item"><div class="stat-value" id="uptime">--</div><div class="stat-label">Uptime</div></div>
-        <div class="stat-item"><div class="stat-value" id="engine">--</div><div class="stat-label">LLM Engine</div></div>
-        <div class="stat-item"><div class="stat-value" id="captures">--</div><div class="stat-label">Screen Frames</div></div>
-        <div class="stat-item"><div class="stat-value" id="responses">--</div><div class="stat-label">Responses</div></div>
-      </div>
-    </div>
-
-    <!-- Config -->
     <div class="grid">
-      <!-- LLM -->
-      <div class="card">
-        <div class="card-title">🧠 LLM Brain</div>
-        <div class="field"><label>Groq API Key</label><input type="password" id="GROQ_API_KEY" placeholder="gsk_..."></div>
-        <div class="field"><label>Groq Model</label><input id="GROQ_MODEL" placeholder="llama-3.3-70b-versatile"></div>
-        <div class="field"><label>Gemini API Key</label><input type="password" id="GEMINI_API_KEY" placeholder="AIza..."></div>
-        <div class="field"><label>Gemini Model</label><input id="GEMINI_MODEL" placeholder="gemini-2.0-flash"></div>
-        <div class="field"><label>Ollama Model</label><input id="OLLAMA_MODEL" placeholder="qwen2.5:7b"></div>
-      </div>
-
-      <!-- Voice -->
-      <div class="card">
-        <div class="card-title">🎙️ Voice Settings</div>
-        <div class="field"><label>TTS Voice</label><input id="TTS_VOICE" placeholder="af_heart"></div>
-        <div class="field"><label>TTS Speed</label><input type="number" step="0.1" id="TTS_SPEED" placeholder="1.1"></div>
-        <div class="field"><label>Whisper Model</label>
-          <select id="WHISPER_MODEL">
-            <option value="tiny">tiny (fastest)</option>
-            <option value="base">base</option>
-            <option value="small" selected>small (recommended)</option>
-            <option value="medium">medium (accurate)</option>
-          </select>
+        <!-- Status Card -->
+        <div class="card">
+            <h2>System Status</h2>
+            <div class="stat-row">
+                <span class="stat-label">Mode</span>
+                <span class="stat-value" id="modeValue">—</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Emotion</span>
+                <span id="emotionValue" class="emotion-badge">neutral</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Amplitude</span>
+                <div class="amplitude-bar"><div class="amplitude-fill" id="ampBar"></div></div>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Uptime</span>
+                <span class="stat-value" id="uptimeValue">—</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Clients</span>
+                <span class="stat-value" id="clientsValue">0</span>
+            </div>
         </div>
-        <div class="field"><label>Input Mode</label>
-          <select id="INPUT_MODE">
-            <option value="auto">Auto VAD</option>
-            <option value="toggle">Toggle (F4)</option>
-            <option value="push">Push-to-talk (F4)</option>
-          </select>
+
+        <!-- Controls Card -->
+        <div class="card">
+            <h2>Controls</h2>
+            <div class="btn-row">
+                <button class="btn" onclick="clearMemory()">🧹 Clear Memory</button>
+                <button class="btn" onclick="triggerAnim('dance')">💃 Dance</button>
+                <button class="btn" onclick="triggerAnim('wave')">👋 Wave</button>
+            </div>
+            <div class="btn-row" style="margin-top: 0.6rem;">
+                <button class="btn" onclick="navigate('left')">⬅ Left</button>
+                <button class="btn" onclick="navigate('center')">⏺ Center</button>
+                <button class="btn" onclick="navigate('right')">➡ Right</button>
+            </div>
+            <div class="btn-row" style="margin-top: 0.6rem;">
+                <button class="btn" onclick="triggerAnim('celebrate')">🎉 Celebrate</button>
+                <button class="btn" onclick="triggerAnim('salute')">🫡 Salute</button>
+                <button class="btn btn-danger" onclick="triggerAnim('die')">💀 Die</button>
+            </div>
         </div>
-      </div>
 
-      <!-- Screen Capture -->
-      <div class="card">
-        <div class="card-title">📸 Screen Capture</div>
-        <div class="toggle-row"><span class="toggle-label">Enable Capture</span><label class="toggle"><input type="checkbox" id="SCREEN_CAPTURE" checked><span class="slider"></span></label></div>
-        <div class="toggle-row"><span class="toggle-label">AI Commentary</span><label class="toggle"><input type="checkbox" id="SCREEN_COMMENTARY" checked><span class="slider"></span></label></div>
-        <div class="field"><label>Monitor</label><input type="number" id="SCREEN_MONITOR" value="1" min="0" max="4"></div>
-        <div class="field"><label>Capture FPS</label><input type="number" step="0.1" id="SCREEN_FPS" value="1.0" min="0.1" max="5.0"></div>
-        <div class="field"><label>Commentary Interval (sec)</label><input type="number" id="SCREEN_COMMENTARY_INTERVAL" value="30" min="10" max="120"></div>
-      </div>
+        <!-- Subtitle -->
+        <div class="card subtitle-box" id="subtitleBox">
+            Waiting for speech...
+        </div>
 
-      <!-- Sound Effects & Twitch -->
-      <div class="card">
-        <div class="card-title">🔊 Sound & Twitch</div>
-        <div class="toggle-row"><span class="toggle-label">Sound Effects</span><label class="toggle"><input type="checkbox" id="SFX_ENABLED" checked><span class="slider"></span></label></div>
-        <div class="field"><label>SFX Volume</label><input type="range" id="SFX_VOLUME" min="0" max="1" step="0.1" value="0.5"></div>
-        <div class="field"><label>Twitch Token</label><input type="password" id="TWITCH_TOKEN" placeholder="oauth:..."></div>
-        <div class="field"><label>Twitch Channel</label><input id="TWITCH_INITIAL_CHANNELS" placeholder="bossiq420"></div>
-      </div>
+        <!-- Conversation Log -->
+        <div class="card" style="grid-column: 1 / -1;">
+            <h2>Conversation Log</h2>
+            <div class="log-container" id="logContainer"></div>
+        </div>
     </div>
 
-    <!-- Actions -->
-    <div class="btn-row">
-      <button class="btn btn-primary" onclick="saveConfig()">💾 Save Config</button>
-      <button class="btn btn-danger" onclick="clearMemory()">🧹 Clear AI Memory</button>
-      <button class="btn btn-outline" onclick="refreshAll()">🔄 Refresh</button>
-    </div>
+    <script>
+        const WS_URL = `ws://${location.host}/ws/mascot`;
+        const API = `http://${location.host}`;
+        let ws = null;
+        let reconnectTimer = null;
 
-    <!-- Logs -->
-    <div class="card" style="margin-top: 16px;">
-      <div class="card-title">📋 Activity Log</div>
-      <div class="log-viewer" id="logViewer">Connecting to PMC Overwatch...</div>
-    </div>
-
-    <div class="footer">PMC Overwatch v0.30.0 — Dashboard on localhost:8420</div>
-  </div>
-
-  <!-- Toast -->
-  <div class="toast" id="toast"></div>
-
-  <script>
-    const API = '';
-
-    // Field IDs that map to .env keys
-    const CONFIG_FIELDS = [
-      'GROQ_API_KEY', 'GROQ_MODEL', 'GEMINI_API_KEY', 'GEMINI_MODEL',
-      'OLLAMA_MODEL', 'TTS_VOICE', 'TTS_SPEED', 'WHISPER_MODEL',
-      'INPUT_MODE', 'SCREEN_CAPTURE', 'SCREEN_COMMENTARY',
-      'SCREEN_MONITOR', 'SCREEN_FPS', 'SCREEN_COMMENTARY_INTERVAL',
-      'SFX_ENABLED', 'SFX_VOLUME', 'TWITCH_TOKEN', 'TWITCH_INITIAL_CHANNELS'
-    ];
-
-    const TOGGLE_FIELDS = ['SCREEN_CAPTURE', 'SCREEN_COMMENTARY', 'SFX_ENABLED'];
-
-    function showToast(msg, type = 'success') {
-      const t = document.getElementById('toast');
-      t.textContent = msg;
-      t.className = `toast ${type} show`;
-      setTimeout(() => t.classList.remove('show'), 3000);
-    }
-
-    async function loadConfig() {
-      try {
-        const res = await fetch(`${API}/api/config`);
-        const data = await res.json();
-
-        CONFIG_FIELDS.forEach(key => {
-          const el = document.getElementById(key);
-          if (!el) return;
-          const val = data[key] || '';
-
-          if (TOGGLE_FIELDS.includes(key)) {
-            el.checked = val.toLowerCase() === 'true' || val === '1';
-          } else if (el.type === 'range' || el.type === 'number') {
-            el.value = val;
-          } else {
-            el.value = val;
-          }
-        });
-      } catch (e) {
-        console.error('Config load failed:', e);
-      }
-    }
-
-    async function saveConfig() {
-      const updates = {};
-      CONFIG_FIELDS.forEach(key => {
-        const el = document.getElementById(key);
-        if (!el) return;
-
-        let val;
-        if (TOGGLE_FIELDS.includes(key)) {
-          val = el.checked ? 'true' : 'false';
-        } else {
-          val = el.value;
+        function connect() {
+            ws = new WebSocket(WS_URL);
+            ws.onopen = () => {
+                document.getElementById('statusText').textContent = 'Connected';
+                document.getElementById('statusDot').style.background = 'var(--green)';
+                addLog('system', 'Connected to PMC Overwatch');
+                fetchStatus();
+            };
+            ws.onclose = () => {
+                document.getElementById('statusText').textContent = 'Disconnected';
+                document.getElementById('statusDot').style.background = 'var(--red)';
+                reconnectTimer = setTimeout(connect, 3000);
+            };
+            ws.onmessage = (e) => {
+                const msg = JSON.parse(e.data);
+                handleMessage(msg);
+            };
         }
 
-        // Skip masked API keys
-        if (val.includes('***')) return;
-        updates[key] = val;
-      });
-
-      try {
-        const res = await fetch(`${API}/api/config`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(updates)
-        });
-        const data = await res.json();
-        showToast(`Saved ${data.updated.length} settings ✓`);
-      } catch (e) {
-        showToast('Save failed', 'error');
-      }
-    }
-
-    async function clearMemory() {
-      try {
-        const res = await fetch(`${API}/api/clear-memory`, { method: 'POST' });
-        const data = await res.json();
-        showToast(data.message || 'Memory cleared ✓');
-      } catch (e) {
-        showToast('Failed to clear memory', 'error');
-      }
-    }
-
-    async function loadStatus() {
-      try {
-        const res = await fetch(`${API}/api/status`);
-        const data = await res.json();
-
-        document.getElementById('uptime').textContent = data.uptime_human || '--';
-        document.getElementById('engine').textContent = data.engine || '--';
-        document.getElementById('captures').textContent = data.screen_frames || '0';
-        document.getElementById('responses').textContent = data.responses || '0';
-
-        document.getElementById('statusDot').style.background = data.running ? 'var(--green)' : 'var(--amber)';
-        document.getElementById('statusText').textContent = data.running ? 'Active' : 'Standby';
-      } catch (e) {
-        document.getElementById('statusDot').style.background = 'var(--red)';
-        document.getElementById('statusText').textContent = 'Disconnected';
-      }
-    }
-
-    async function loadLogs() {
-      try {
-        const res = await fetch(`${API}/api/logs`);
-        const data = await res.json();
-        const viewer = document.getElementById('logViewer');
-        if (data.logs && data.logs.length > 0) {
-          viewer.textContent = data.logs.join('\n');
-          viewer.scrollTop = viewer.scrollHeight;
+        function handleMessage(msg) {
+            switch (msg.type) {
+                case 'mode':
+                    const el = document.getElementById('modeValue');
+                    el.textContent = msg.value.toUpperCase();
+                    el.className = `stat-value mode-${msg.value}`;
+                    break;
+                case 'amplitude':
+                    document.getElementById('ampBar').style.width = `${msg.value * 100}%`;
+                    break;
+                case 'emotion':
+                    document.getElementById('emotionValue').textContent = msg.value;
+                    break;
+                case 'subtitle':
+                    document.getElementById('subtitleBox').textContent = msg.value || 'Waiting for speech...';
+                    if (msg.value) addLog('ai', msg.value);
+                    break;
+                case 'chat':
+                    addLog('user', `[${msg.value.user}] ${msg.value.message}`);
+                    break;
+            }
         }
-      } catch (e) { /* ignore */ }
-    }
 
-    function refreshAll() {
-      loadConfig();
-      loadStatus();
-      loadLogs();
-      showToast('Refreshed ✓');
-    }
+        function addLog(type, text) {
+            const container = document.getElementById('logContainer');
+            const entry = document.createElement('div');
+            entry.className = `log-entry log-${type}`;
+            const time = new Date().toLocaleTimeString();
+            entry.textContent = `[${time}] ${text}`;
+            container.appendChild(entry);
+            container.scrollTop = container.scrollHeight;
+            // Keep last 100 entries
+            while (container.children.length > 100) container.removeChild(container.firstChild);
+        }
 
-    // Initial load
-    loadConfig();
-    loadStatus();
-    loadLogs();
+        async function fetchStatus() {
+            try {
+                const res = await fetch(`${API}/api/status`);
+                const data = await res.json();
+                document.getElementById('uptimeValue').textContent = data.uptime_human || '—';
+                document.getElementById('clientsValue').textContent = data.mascot_clients || 0;
+            } catch (e) {}
+            setTimeout(fetchStatus, 5000);
+        }
 
-    // Auto-refresh status and logs every 5s
-    setInterval(loadStatus, 5000);
-    setInterval(loadLogs, 5000);
-  </script>
+        async function clearMemory() {
+            try {
+                await fetch(`${API}/api/clear-memory`, { method: 'POST' });
+                addLog('system', 'Memory cleared');
+            } catch (e) { addLog('system', 'Failed to clear memory'); }
+        }
+
+        function triggerAnim(name) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'animation', value: name }));
+                addLog('system', `Triggered: ${name}`);
+            }
+        }
+
+        function navigate(dir) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'navigate', value: dir }));
+            }
+        }
+
+        connect();
+    </script>
 </body>
 </html>

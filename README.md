@@ -2,326 +2,270 @@
   <img src="assets/avatar.png" alt="PMC Overwatch" width="160" />
 </p>
 
-<h1 align="center">PMC Overwatch — Tarkov AI Companion</h1>
+<h1 align="center">PMC Overwatch</h1>
 
 <p align="center">
-  <strong>Real-time voice AI companion for Escape from Tarkov</strong><br/>
-  3D VRM Avatar • Mixamo Animations • Neural Voice • Groq/Ollama LLM
+  <strong>Real-time AI voice companion for Escape from Tarkov streaming</strong><br/>
+  3D Animated Mascot • Triple-Engine LLM • Neural Voice • Twitch Integration
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/python-3.10%2B-blue?logo=python" alt="Python 3.10+" />
+  <img src="https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white" alt="Python" />
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS-lightgrey?logo=windows" alt="Platform" />
-  <img src="https://img.shields.io/badge/LLM-Groq%20%2B%20Ollama-orange" alt="LLM" />
-  <img src="https://img.shields.io/badge/TTS-edge--tts%20Ava-green" alt="TTS" />
-  <img src="https://img.shields.io/badge/STT-faster--whisper-red" alt="STT" />
+  <img src="https://img.shields.io/badge/LLM-Groq%20%2B%20Gemini%20%2B%20Ollama-FF6B35" alt="LLM" />
+  <img src="https://img.shields.io/badge/TTS-edge--tts%20%2B%20Kokoro-22c55e" alt="TTS" />
+  <img src="https://img.shields.io/badge/STT-Whisper%20%2B%20Groq-ef4444" alt="STT" />
+  <img src="https://img.shields.io/badge/VAD-Silero%20Neural-7c3aed" alt="VAD" />
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="License" />
 </p>
 
 ---
 
-## ✨ Features
+## What Is This?
 
+PMC Overwatch is an **AI-powered voice companion** designed for Escape from Tarkov live-streaming on Twitch. It runs as a headless voice engine with a 3D animated mascot overlay for OBS — think of it as a virtual co-host that listens, talks back, reacts to gameplay, and interacts with Twitch chat.
+
+**Key highlights:**
+- 🎙️ Speaks back in real-time with Microsoft Neural Voices (edge-tts)
+- 🧠 Triple-engine LLM with automatic failover (Groq → Gemini → Ollama)
+- 🎮 Deep Tarkov knowledge: quests, maps, ammo tables, bosses, flee market prices
+- 🤖 3D animated mascot with Mixamo motion-captured animations in OBS
+- 🔊 Neural voice activity detection (Silero VAD) with barge-in support
+- 🌐 Trilingual: English, Russian, Romanian with auto-detection
+
+---
+
+## Architecture
+
+```
+                          ┌──────────────────────────┐
+                          │   OBS Browser Source      │
+                          │   mascot_3d.html          │
+                          │   Three.js + FBX + GLB    │
+                          │   3D Animated Mascot      │
+                          └────────────▲─────────────┘
+                                       │ WebSocket
+┌──────────────────────────────────────┼────────────────────────────────┐
+│                              main.py │ (Headless Engine)              │
+│                                      │                                │
+│  ┌─────────────┐   ┌────────────┐   ┌▼───────────────┐              │
+│  │ voice_input  │──▶│   brain    │──▶│ mascot_server  │              │
+│  │              │   │            │   │ FastAPI+WS:8420│              │
+│  │ Silero VAD   │   │ Groq  ────┤   └────────────────┘              │
+│  │ Whisper STT  │   │ Gemini ───┤                                    │
+│  │ Noise Reduce │   │ Ollama ───┘   ┌────────────────┐              │
+│  └─────────────┘   │               │ voice_output    │              │
+│                     │ stream_       │ edge-tts (pri)  │              │
+│                     │ sentences() ─▶│ Kokoro  (bkup)  │              │
+│                     └────────────┘  │ Lip-sync amp    │              │
+│                                     └────────────────┘              │
+│  ┌──────────────┐   ┌─────────────┐  ┌──────────────┐              │
+│  │ video_capture │   │ expression  │  │ sound_effects│              │
+│  │ Screen+Gemini│   │ _engine     │  │ Tactical SFX │              │
+│  │ Vision       │   │ 12 emotions │  └──────────────┘              │
+│  └──────────────┘   └─────────────┘                                  │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Features
+
+### Voice & Audio Pipeline
+| Feature | Technology | Description |
+|---------|-----------|-------------|
+| **Speech Detection** | Silero VAD (neural) | >99% accuracy, rejects keyboard/mouse noise. RMS fallback if unavailable |
+| **Speech-to-Text** | Groq cloud + faster-whisper | Groq `whisper-large-v3-turbo` primary, local `faster-whisper` fallback |
+| **Text-to-Speech** | edge-tts + Kokoro ONNX | Microsoft Ava Neural (primary), Kokoro 82M offline backup |
+| **Barge-In** | Interrupt detection | Speak over the AI — it stops, captures your audio, and responds |
+| **Noise Reduction** | noisereduce (spectral) | Strips background noise before transcription |
+| **Language Detection** | Auto + per-sentence | English, Russian, Romanian — locks language per response |
+
+### AI Brain (Triple-Engine LLM)
+| Engine | Speed | Model | Failover |
+|--------|-------|-------|----------|
+| **Groq Cloud** | 250+ tok/s | llama-3.3-70b-versatile | Primary — rate-limit auto-fallback to 8b-instant |
+| **Google Gemini** | ~100 tok/s | gemini-2.0-flash | Secondary — also provides screen vision analysis |
+| **Ollama Local** | 10-60 tok/s | qwen2.5:3b | Offline fallback — auto-starts/stops with app |
+
+Rate limits are tracked with cooldown timers. When one engine hits its limit, the system seamlessly switches to the next and auto-restores when the cooldown expires.
+
+### 3D Mascot (OBS Overlay)
 | Feature | Description |
 |---------|-------------|
-| 🎤 **Voice Input** | Real-time speech recognition via faster-whisper (GPU, multilingual) |
-| 🧠 **Dual LLM** | Groq cloud (250+ tok/s, free) + Ollama local with **auto-failover** |
-| 🔊 **Neural TTS** | Microsoft edge-tts with per-sentence language detection |
-| 🎭 **Live Procedural Avatar** | Fully code-drawn character — face, eyes, mouth, hair rendered from scratch each frame |
-| 🎵 **Lip Sync** | RMS amplitude → mouth region blend (20ms resolution) |
-| 👁️ **Eye Animation** | Multi-stage blinks with independent eye region compositing |
-| 😊 **Emotion Detection** | Keyword sentiment → expression overlay changes |
-| 🎤 **Push-to-Talk** | Three input modes: Auto VAD, Toggle (F4), Hold (F4) |
-| 🌐 **Multilingual** | English, Russian, Romanian — auto-detect speech + per-language voice selection |
-| 🔇 **Barge-In** | Interrupt the AI mid-speech — she stops and listens |
-| 🛡️ **Anti-Hallucination** | Spectral flatness filter + Whisper hallucination rejection (rejects squeaks, clicks, false "thank you") |
-| 📺 **Twitch Bot** | Optional chat integration for stream interactions |
-| 🎮 **Tarkov Knowledge** | Built-in quest reference database for accurate game info |
-| 🎬 **OBS Overlay** | Transparent window mode (Ctrl+O) — use as streaming overlay |
-| 🛡️ **Persona Editor** | Edit AI personality and system prompt (Ctrl+P) |
-| 💬 **Chat History** | Auto-saves session logs for review |
-| 🔄 **Rate Limit Fallback** | Auto-switches to fast backup model with cooldown cache when rate-limited |
-| 🌍 **Language Selector** | UI dropdown to switch language on-the-fly |
-| ⚡ **Auto-Failover** | Groq rate-limit → instant Ollama switch → auto switch-back |
-| 🔇 **Smart Barge-In** | Interrupt the AI mid-speech (keyboard/laughter ignored, real speech detected) |
-| 🎭 **3D VRM Avatar** | Full 3D anime character with motion-captured animations (Three.js + VRM) |
-| 💃 **16 Animations** | Wave, clap, dance, think, bow, salute, celebrate, and more — AI-triggered |
-| 🔉 **Noise Reduction** | Spectral noise gating removes background sounds before transcription |
+| **Character** | Custom FBX model with Altyn helmet + gold RPK weapon |
+| **Animations** | 10 Mixamo FBX: idle, rifle_walk, crouch, wave, clap, think, shrug, dance |
+| **AI-Driven Gestures** | LLM uses `[gesture:NAME]` tags to trigger animations contextually |
+| **Voice-Reactive** | Green glow aura, amplitude-driven effects, mode indicators |
+| **Movement** | Autonomous walking + Twitch chat commands (!move, !dance, !wave) |
+| **Debug Panel** | Press **D** for live RPK position/rotation/scale sliders |
+
+### Stream Integration
+| Feature | Description |
+|---------|-------------|
+| **Twitch Chat Bot** | Responds to chat, accepts movement commands |
+| **Screen Commentary** | Gemini Vision analyzes gameplay and provides auto-commentary |
+| **Dashboard UI** | Web control panel at `localhost:8420` with real-time status |
+| **Tarkov Knowledge** | Quest database, ammo tables, map extracts, boss info, flea market |
 
 ---
 
-## 🏗 Architecture
-
-```
-┌──────────────────────────────────────────────┐
-│                PMC Overwatch GUI              │
-│  ┌──────────┐  ┌──────────┐  ┌────────────┐ │
-│  │  Sprite  │  │ Activity │  │  Controls   │ │
-│  │  Avatar  │  │   Log    │  │ Start/Stop  │ │
-│  │  + Holo  │  │          │  │             │ │
-│  └─────┬────┘  └────┬─────┘  └──────┬─────┘ │
-└────────┼────────────┼────────────────┼───────┘
-         │            │                │
-    ┌────▼────────────▼────────────────▼───┐
-    │             Main Controller          │
-    │          (PMCOverwatch)              │
-    └──┬──────────┬───────────┬────────────┘
-       │          │           │
-  ┌────▼──┐  ┌───▼────┐  ┌──▼───────┐
-  │Voice  │  │ Brain  │  │  Voice   │
-  │Input  │  │Groq/   │  │  Output  │
-  │Whisper│  │Ollama  │  │ edge-tts │
-  └───────┘  └───┬────┘  └──────────┘
-                 │
-          ┌──────▼──────┐
-          │ Expression  │
-          │   Engine    │
-          └─────────────┘
-```
-
----
-
-## 🚀 Quick Start
+## Quick Start
 
 ### Prerequisites
 
 | Requirement | Required? | Notes |
 |-------------|-----------|-------|
 | **Python 3.10+** | ✅ Yes | [python.org/downloads](https://www.python.org/downloads/) |
-| **Microphone** | ✅ Yes | Any USB/built-in mic works |
-| **Groq API Key** | 🟡 Recommended | Free at [console.groq.com/keys](https://console.groq.com/keys) — 250+ tok/s |
-| **Ollama** | 🔵 Optional | Local fallback — [ollama.com](https://ollama.com) |
-| **CUDA GPU** | 🔵 Optional | Speeds up Whisper transcription |
+| **Microphone** | ✅ Yes | Any USB or built-in mic |
+| **Groq API Key** | 🟡 Recommended | Free at [console.groq.com](https://console.groq.com/keys) |
+| **Gemini API Key** | 🟡 Recommended | Free at [aistudio.google.com](https://aistudio.google.com/app/apikey) |
+| **Ollama** | 🔵 Optional | Auto-installs locally — [ollama.com](https://ollama.com) |
 
-### Step 1 — Clone the repo
+### Installation
 
 ```bash
+# Clone
 git clone https://github.com/Bossiq/Tarkov_AI_Frriend.git
 cd Tarkov_AI_Frriend
-```
 
-### Step 2 — Create a virtual environment
-
-```bash
-# Create venv
+# Virtual environment
 python -m venv venv
+source venv/bin/activate        # macOS/Linux
+# venv\Scripts\activate         # Windows
 
-# Activate it
-# macOS / Linux:
-source venv/bin/activate
-# Windows (CMD):
-venv\Scripts\activate
-# Windows (PowerShell):
-.\venv\Scripts\Activate.ps1
-```
-
-### Step 3 — Install dependencies
-
-```bash
+# Dependencies
 pip install -r requirements.txt
-```
 
-> **Windows note:** If `sounddevice` fails to install, you may need to install [Microsoft Visual C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/).
+# Configure
+cp .env.example .env
+# Edit .env → add your GROQ_API_KEY and GEMINI_API_KEY
 
-### Step 4 — Configure environment
-
-```bash
-# Copy the example config
-cp .env.example .env        # macOS / Linux
-copy .env.example .env      # Windows
-```
-
-Open `.env` in any text editor and add your **Groq API key**:
-
-```ini
-GROQ_API_KEY=gsk_your_key_here
-```
-
-That's the only required change. Everything else has sensible defaults.
-
-### Step 5 — Run the app
-
-```bash
+# Run
 python main.py
 ```
 
-The GUI will launch. Click **Start** to begin listening.
+The mascot overlay is served at **http://127.0.0.1:8420/mascot3d** — add this as an OBS Browser Source (1920×1080, transparent background).
 
 ---
 
-## ⚙️ Configuration
+## Configuration
 
-All settings are in `.env` (copy from `.env.example`):
+All settings live in `.env` (copy from `.env.example`):
+
+<details>
+<summary><strong>Click to expand full configuration table</strong></summary>
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `GROQ_API_KEY` | — | Groq cloud API key (primary, fastest) |
-| `GROQ_MODEL` | `llama-3.3-70b-versatile` | Groq model |
-| `OLLAMA_MODEL` | `qwen2.5:7b` | Ollama fallback model |
-| `OLLAMA_NUM_CTX` | `2048` | Context window size |
-| `WHISPER_MODEL` | `small` | Whisper model size (`tiny`, `base`, `small`, `medium`) |
-| `WHISPER_COMPUTE_TYPE` | `float16` | Compute type (`float16`, `int8`, `float32`) |
-| `WHISPER_LANGUAGE` | `auto` | Force language (`auto`, `en`, `ro`, `ru`) |
-| `EDGE_RATE` | `+0%` | Speech speed adjustment |
-| `INPUT_MODE` | `auto` | Input mode (`auto`, `toggle`, `push`) |
-| `PTT_KEY` | `f4` | Push-to-talk hotkey |
-| `TTS_VOICE` | `af_heart` | Kokoro fallback voice |
-| `TTS_SPEED` | `1.1` | Kokoro speech speed |
-| `LOG_LEVEL` | `INFO` | Logging verbosity |
+| `GROQ_API_KEY` | — | Groq cloud API key (primary LLM + STT) |
+| `GROQ_MODEL` | `llama-3.3-70b-versatile` | Primary LLM model |
+| `GEMINI_API_KEY` | — | Google Gemini API key (vision + fallback LLM) |
+| `GEMINI_MODEL` | `gemini-2.0-flash` | Gemini model |
+| `OLLAMA_MODEL` | `qwen2.5:3b` | Local fallback model (auto-downloaded) |
+| `OLLAMA_NUM_CTX` | `2048` | Ollama context window |
+| `WHISPER_MODEL` | `small` | Local Whisper size: `tiny`, `base`, `small`, `medium` |
+| `WHISPER_LANGUAGE` | `auto` | Force language: `auto`, `en`, `ro`, `ru` |
+| `TTS_VOICE` | `af_heart` | Kokoro TTS voice (fallback only) |
+| `TTS_SPEED` | `1.05` | TTS playback speed |
+| `EDGE_RATE` | `+10%` | edge-tts speed adjustment |
+| `INPUT_MODE` | `auto` | Mic mode: `auto` (VAD), `toggle`, `push` |
 | `TWITCH_TOKEN` | — | Twitch OAuth token (optional) |
-| `TWITCH_INITIAL_CHANNELS` | — | Twitch channel name (optional) |
-| `AVATAR_3D` | `true` | Enable 3D VRM avatar (set to `false` for sprite-only mode) |
+| `TWITCH_INITIAL_CHANNELS` | — | Twitch channel to join |
+| `LOG_LEVEL` | `INFO` | Logging: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
 
-### LLM Engine Selection
-
-| Config | Speed | Quality | Requirement |
-|--------|-------|---------|-------------|
-| Groq llama-3.3-70b (default) | 276 tok/s | Excellent (70B model) | Free API key |
-| Groq llama-3.1-8b-instant (auto-fallback) | 877 tok/s | Good | Free API key |
-| Ollama qwen2.5:3b | 20-60 tok/s | Good | Local GPU |
-| Ollama qwen2.5:7b | 10-30 tok/s | Better | Good GPU |
-
-> **Rate limiting**: When the primary Groq model is rate-limited (free tier: 30 RPM, 100K tokens/day),
-> the app automatically falls back to `llama-3.1-8b-instant` with a cooldown cache to avoid cascading failures.
+</details>
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 Tarkov_AI_Frriend/
-├── main.py              # Application entry point & controller
-├── brain.py             # Dual LLM brain (Groq + Ollama) with rate-limit fallback
-├── gui.py               # Sprite-composited holographic avatar GUI
-├── voice_input.py       # Speech recognition (faster-whisper + spectral filtering)
-├── voice_output.py      # Text-to-speech (edge-tts Ava Multilingual + Kokoro fallback)
-├── expression_engine.py # Emotion state machine → sprite selection
-├── tarkov_data.py       # Tarkov quest knowledge base
-├── twitch_bot.py        # Twitch chat integration
-├── video_capture.py     # Screen capture module
-├── logging_config.py    # Logging configuration
-├── avatar_3d.py         # 3D VRM avatar (Three.js, AnimationMixer, pywebview)
-├── download_animations.py # Helper to download Mixamo FBX animations
-├── requirements.txt     # Python dependencies
-├── .env.example         # Environment template (copy to .env)
-├── CHANGELOG.md         # Version history
-├── LICENSE              # MIT License
-├── assets/              # Avatar assets
-│   ├── avatar_3d.html   # 3D VRM renderer (Three.js + embedded animations)
-│   ├── animations/      # Optional Mixamo FBX files (upgrade path)
-│   ├── idle.png         # Sprite: default idle expression
-│   ├── blink.png        # Sprite: blink frame
-│   └── ...              # Other sprite expressions
+├── main.py                  # Entry point — headless voice engine orchestrator
+├── brain.py                 # Triple-engine LLM (Groq → Gemini → Ollama)
+├── voice_input.py           # Silero VAD + Whisper STT + noise reduction
+├── voice_output.py          # edge-tts + Kokoro TTS + lip-sync amplitude
+├── mascot_server.py         # FastAPI + WebSocket server (port 8420)
+├── expression_engine.py     # 12-emotion state machine + gesture prompts
+├── sound_effects.py         # Programmatic tactical SFX (numpy-generated)
+├── video_capture.py         # Screen capture + Gemini Vision integration
+├── tarkov_data.py           # Tarkov knowledge base (quests, ammo, maps)
+├── tarkov_updater.py        # Live data from tarkov.dev GraphQL API
+├── twitch_bot.py            # Twitch chat bot (TwitchIO)
+├── logging_config.py        # Rotating file + console logging
+├── requirements.txt         # Python dependencies
+├── .env.example             # Configuration template
+├── assets/
+│   ├── mascot_3d.html       # 3D mascot overlay (Three.js + FBX animations)
+│   ├── mascot.html          # 2D sprite fallback overlay
+│   ├── dashboard_ui.html    # Web control panel
+│   └── animations/          # Mixamo FBX animation files
+└── models/
+    ├── altyn_boss.fbx       # 3D character model (23MB)
+    ├── rpk_gold.glb         # Gold RPK weapon model (8MB)
+    └── kokoro/              # Kokoro TTS model (offline, 325MB)
 ```
-
-## 🎭 Avatar System
-
-The app supports two avatar modes:
-
-### 3D VRM Avatar (default, `AVATAR_3D=true`)
-
-- **VRM model** loaded via Three.js + `@pixiv/three-vrm`
-- **16 embedded animations**: idle, wave, clap, think, point, shrug, celebrate, salute, nod, headShake, bow, crossArms, facepalm, dance, laugh, thumbsUp
-- **Smooth keyframe interpolation** using `THREE.InterpolateSmooth` (catmull-rom curves)
-- **AnimationMixer** with crossfade blending between animations
-- **AI-driven gestures**: The LLM uses `[gesture:NAME]` tags to trigger animations
-- **Lip sync**: RMS amplitude → mouth blend shapes
-- **Emotions**: Smooth blend shape interpolation (happy, angry, sad, surprised)
-- **Autonomous behavior**: Random blinks, gaze shifts, idle fidgets
-- **Upgrade path**: Drop Mixamo FBX files in `assets/animations/` for motion-captured quality
-
-### Sprite Avatar (`AVATAR_3D=false`)
-
-- 24 expression sprites with cross-fade transitions
-- Holographic post-processing (scanlines, glow, flicker)
-- Organic motion (Perlin-noise sway, breathing, blinks)
 
 ---
 
-## 🔧 Troubleshooting
+## Technical Highlights
+
+<details>
+<summary><strong>For engineers and recruiters — click to expand</strong></summary>
+
+### Concurrency Architecture
+- **6 concurrent threads**: main loop, mic listener, screen analysis, Twitch bot, mascot server, Whisper model loading
+- **Thread-safe guards**: `_processing_lock` prevents parallel LLM calls, `_toggle_lock` prevents duplicate listen threads
+- **Shared interrupt event**: coordinates barge-in between VoiceInput ↔ VoiceOutput across threads
+
+### Voice Pipeline Engineering
+- **Callback-based audio capture** (not blocking `stream.read()`) — prevents indefinite hangs when mic hardware stalls after TTS
+- **Pre-buffer**: 10 chunks (1s) of audio saved before speech onset — captures the first syllable that would be lost
+- **Neural VAD → RMS fallback**: Silero VAD runs ~1ms per 512-sample window; falls back to RMS + spectral flatness if torch unavailable
+- **Sentence-by-sentence streaming**: TTS speaks each sentence as it arrives from the LLM — no waiting for full response
+
+### LLM Failover System
+- **Rate limit parsing**: extracts cooldown duration from API error messages, sets per-engine timers
+- **Automatic restore**: background timers restore higher-priority engines after cooldown expires
+- **Context injection**: quest/ammo/map data injected only when keyword-triggered (saves tokens)
+- **Memory compression**: when conversation exceeds 8 messages, oldest half is summarized to a single message
+
+### Audio Quality
+- **Dynamic range compression** (soft-knee, 3:1 ratio above 0.7 threshold)
+- **Anti-click fading** (50ms cosine ramps)
+- **Trailing artifact stripping** (kills edge-tts MP3 decoder beeps)
+- **Post-TTS cooldown** (0.3s) prevents mic from capturing TTS tail
+
+</details>
+
+---
+
+## Troubleshooting
 
 | Issue | Solution |
 |-------|----------|
-| **No microphone detected** | Check `sounddevice.query_devices()` — ensure your mic is listed. On macOS, grant Terminal/IDE microphone permission in System Preferences → Privacy. |
-| **Groq rate limit errors** | Normal on free tier. The app auto-falls back to `llama-3.1-8b-instant`. Wait ~60s for cooldown. |
-| **Whisper model download slow** | First run downloads the model (~500MB for `small`). Subsequent runs use the cached model. |
-| **`pip install` fails on Windows** | Install [Visual C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/). Run `pip install --upgrade pip` first. |
-| **No sound output** | Ensure your system default audio output device is working. The app plays audio through the default device. |
-| **Romanian/Russian not detected** | Set `WHISPER_LANGUAGE=ro` or `WHISPER_LANGUAGE=ru` in `.env` to force the language instead of auto-detect. |
+| **No microphone detected** | Grant mic permission in System Settings. Check `python -c "import sounddevice; print(sounddevice.query_devices())"` |
+| **Groq rate limit** | Normal on free tier (30 RPM). Auto-falls back to Gemini → Ollama. Wait ~60s. |
+| **First run slow** | Whisper model downloads on first use (~500MB for `small`). Cached after that. |
+| **macOS screen capture** | Grant Screen Recording permission in System Settings → Privacy & Security |
+| **`pip install` fails (Windows)** | Install [Visual C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) first |
 
 ---
 
-## 🛠 Development
-
-### Testing
-
-```bash
-# Test all imports work
-python -c "from voice_output import VoiceOutput; from voice_input import VoiceInput; from brain import Brain; from expression_engine import ExpressionEngine; print('All imports OK')"
-
-# Test GUI launches
-python -c "from gui import OverwatchGUI; app = OverwatchGUI(); app.after(3000, app._on_close); app.mainloop()"
-```
-
-### Key dependencies
-
-- `groq` — Groq cloud LLM API client
-- `ollama` — Local LLM client (fallback)
-- `customtkinter` — Modern dark-mode GUI framework
-- `faster-whisper` — GPU-accelerated speech recognition (CTranslate2)
-- `edge-tts` — Microsoft neural TTS voices
-- `sounddevice` / `soundfile` — Audio I/O
-- `Pillow` — Image processing for avatar compositing
-- `pynput` — Global keyboard listener for push-to-talk
-- `twitchio` — Twitch bot framework
-- `kokoro-onnx` — Fallback TTS engine
-
----
-
-## 📝 Contributing
-
-This is a personal project. Feel free to fork and adapt for your own use.
-
-## 📄 License
-
-This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
-
-## 🚀 Future Roadmap
-
-Planned improvements to push quality, speed, and intelligence:
-
-### AI & LLM
-| Improvement | Impact | Description |
-|---|---|---|
-| **Google Gemini API** | ⚡ More free tokens | 1,500 req/day free tier — 3rd engine option |
-| **Context compression** | 🧠 Smarter memory | Summarize old messages instead of dropping them |
-| **RAG with Tarkov wiki** | 🎯 Better accuracy | Live item/map/quest data instead of static reference |
-| **Response quality scoring** | 📊 Self-improvement | Score responses and tune prompts based on feedback |
-| **Streaming function calls** | 🔧 Actions | Let the AI trigger in-game overlays, timers, etc. |
-
-### Voice & Audio
-| Improvement | Impact | Description |
-|---|---|---|
-| **Voice cloning** | 🎭 Custom personality | Clone a specific voice for the AI character |
-| **Whisper large-v3** | 🎤 Better STT | More accurate transcription (needs GPU) |
-| **Faster TTS (Kokoro v2)** | ⚡ Lower latency | Sub-200ms first-byte TTS |
-| **Emotion-aware TTS** | 😊 Natural speech | Adjust TTS pitch/rate based on detected emotion |
-| **Noise cancellation** | 🔇 Cleaner input | RNNoise or similar for keyboard/background filtering |
-
-### Avatar & UI
-| Improvement | Impact | Description |
-|---|---|---|
-| **Live2D avatar** | 🎭 Premium look | Replace sprite compositing with Live2D rigging |
-| **Emotion-driven expressions** | 😊 Richer reactions | More expression states (angry, surprised, sad) |
-| **Webcam face tracking** | 👁️ Mirror user | Map user expressions to avatar |
-| **3D avatar (Three.js)** | 🌟 Next-gen | Full 3D model with physics-based animation |
-| **Custom avatar builder** | 🎨 User choice | Let users pick/design their own AI companion |
-
-## 🙏 Acknowledgments
+## Acknowledgments
 
 - [Groq](https://groq.com) — Ultra-fast cloud LLM inference
+- [Google Gemini](https://ai.google.dev/) — Multimodal AI with vision
 - [Ollama](https://ollama.com) — Local LLM inference
-- [faster-whisper](https://github.com/SYSTRAN/faster-whisper) — CTranslate2 Whisper
-- [edge-tts](https://github.com/rany2/edge-tts) — Microsoft neural voices
-- [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter) — Modern Tkinter
+- [faster-whisper](https://github.com/SYSTRAN/faster-whisper) — CTranslate2 Whisper implementation
+- [edge-tts](https://github.com/rany2/edge-tts) — Microsoft neural TTS voices
+- [Kokoro TTS](https://github.com/thewh1teagle/kokoro-onnx) — Local ONNX neural TTS
+- [Silero VAD](https://github.com/snakers4/silero-vad) — Neural voice activity detection
+- [Three.js](https://threejs.org/) — 3D graphics engine
+- [Mixamo](https://www.mixamo.com/) — Motion-captured animations
 - [Escape from Tarkov](https://www.escapefromtarkov.com/) — Battlestate Games
+
+## License
+
+MIT License — see [LICENSE](LICENSE) for details.

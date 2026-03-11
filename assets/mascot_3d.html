@@ -1,0 +1,954 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Bossiq420 — Altyn Raid Boss 3D</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;700&family=Orbitron:wght@500;700&display=swap');
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; background: transparent; overflow: hidden;
+    font-family: 'Rajdhani', 'Segoe UI', Arial, sans-serif; }
+
+  /* ── Subtitle Bar ─────────────────────────────────────── */
+  #subtitle-bar {
+    position: fixed; bottom: 60px; left: 50%; transform: translateX(-50%);
+    max-width: 750px; padding: 10px 24px;
+    background: rgba(0,0,0,0.75); backdrop-filter: blur(12px);
+    color: #e0ffe0; font-size: 18px; font-weight: 500; letter-spacing: 0.5px;
+    border-radius: 8px; text-align: center; opacity: 0;
+    transition: opacity 0.4s ease; pointer-events: none;
+    text-shadow: 0 0 8px rgba(76,175,80,0.5);
+    border: 1px solid rgba(76,175,80,0.3);
+    box-shadow: 0 0 20px rgba(76,175,80,0.1), inset 0 0 20px rgba(76,175,80,0.05);
+  }
+  #subtitle-bar.visible { opacity: 1; }
+  #subtitle-bar.speaking { border-color: rgba(76,175,80,0.6);
+    animation: subtitlePulse 2s ease-in-out infinite; }
+  @keyframes subtitlePulse {
+    0%,100% { box-shadow: 0 0 20px rgba(76,175,80,0.2); }
+    50% { box-shadow: 0 0 35px rgba(76,175,80,0.4); }
+  }
+
+  /* ── Chat Bubble ──────────────────────────────────────── */
+  #chat-bubble {
+    position: fixed; padding: 8px 14px;
+    background: rgba(10,10,10,0.9); backdrop-filter: blur(8px);
+    color: #b0ffb0; font-size: 14px; font-weight: 500;
+    border-radius: 6px; border: 1px solid rgba(76,175,80,0.35);
+    opacity: 0; transition: opacity 0.3s ease; pointer-events: none;
+    max-width: 260px; word-wrap: break-word;
+    box-shadow: 0 0 12px rgba(76,175,80,0.15);
+  }
+  #chat-bubble.visible { opacity: 1; }
+
+  /* ── Mode Tag ─────────────────────────────────────────── */
+  #mode-tag {
+    position: fixed; padding: 3px 10px;
+    background: rgba(0,0,0,0.6); color: rgba(76,175,80,0.8);
+    font-family: 'Orbitron', monospace; font-size: 10px; font-weight: 700;
+    letter-spacing: 2px; text-transform: uppercase; border-radius: 4px;
+    border: 1px solid rgba(76,175,80,0.2);
+    opacity: 0; transition: opacity 0.3s ease; pointer-events: none;
+  }
+  #mode-tag.visible { opacity: 1; }
+
+  /* ── Loading Indicator ────────────────────────────────── */
+  #loading {
+    position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%);
+    color: #4caf50; font-family: 'Orbitron', monospace; font-size: 14px;
+    letter-spacing: 3px; text-transform: uppercase;
+  }
+</style>
+</head>
+<body>
+<div id="subtitle-bar"></div>
+<div id="chat-bubble"></div>
+<div id="mode-tag"></div>
+<div id="loading">LOADING ALTYN BOSS...</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.161/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.161/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+
+// ═══════════════════════════════════════════════════════════════════
+// BOSSIQ420 ALTYN RAID BOSS — 3D OBS OVERLAY
+// Three.js FBX character + GLB weapon, walking across screen
+// ═══════════════════════════════════════════════════════════════════
+
+const subtitleBar = document.getElementById('subtitle-bar');
+const chatBubble = document.getElementById('chat-bubble');
+const modeTag = document.getElementById('mode-tag');
+const loadingEl = document.getElementById('loading');
+
+// ── Configuration ────────────────────────────────────────────────
+const CONFIG = {
+  // Model paths (served by mascot_server.py)
+  characterFBX: '/models/altyn_boss.fbx',
+  weaponGLB: '/models/rpk_gold.glb',
+
+  // Character setup
+  characterScale: 1.8,        // Scale factor for the character
+  floorOffset: 0.15,          // Y offset to fix sunken origin
+  weaponBone: 'mixamorigRightHand', // Bone to parent weapon to
+  weaponScale: 45,            // Compensates for FBX cm→m scaling
+  weaponOffset: { x: 3, y: 0, z: 8 },  // Grip position in bone-local units
+  weaponRotation: { x: -1.57, y: 0.5, z: 0 }, // Horizontal rifle hold across chest
+
+  // Camera
+  cameraFOV: 45,
+  cameraDistance: 6,
+  cameraHeight: 1.5,
+
+  // Movement
+  moveSpeed: 0.03,            // World units per frame
+  turnSpeed: 0.08,            // Radians per frame for smooth turning
+  groundY: -1.0,              // Y position of ground plane
+  screenBoundsX: 5.0,         // How far left/right the character can go
+
+  // Glow
+  glowColor: 0x4caf50,        // Green
+  glowIntensity: { idle: 0.3, listening: 0.6, thinking: 0.5, speaking: 1.0 },
+
+  // Subtitles
+  subtitleTimeout: 6000,
+  chatBubbleTimeout: 5000,
+};
+
+// ── State ────────────────────────────────────────────────────────
+const state = {
+  mode: 'idle',
+  emotion: 'neutral',
+  amplitude: 0,
+  x: 0,                       // Current X position in world space
+  targetX: 0,                 // Target X position
+  rotationY: 0,               // Current facing rotation
+  targetRotationY: 0,         // Target facing rotation
+  isWalking: false,
+  currentAnimName: 'idle',
+};
+
+// ═══════════════════════════════════════════════════════════════════
+// THREE.JS SCENE SETUP
+// ═══════════════════════════════════════════════════════════════════
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setClearColor(0x000000, 0);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.LinearToneMapping;  // No crushes — preserves color
+renderer.toneMappingExposure = 2.0;               // Bright & vivid
+renderer.outputEncoding = THREE.sRGBEncoding;     // Correct color space
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = null;
+
+// Camera: perspective, looking at ground level from front
+const camera = new THREE.PerspectiveCamera(
+  CONFIG.cameraFOV,
+  window.innerWidth / window.innerHeight,
+  0.1, 100
+);
+camera.position.set(0, CONFIG.cameraHeight, CONFIG.cameraDistance);
+camera.lookAt(0, 0.5, 0);
+
+// ── Lighting (bright, vivid — no more dark character) ────────────
+const ambientLight = new THREE.AmbientLight(0xffffff, 2.5);   // STRONG ambient
+scene.add(ambientLight);
+
+const hemiLight = new THREE.HemisphereLight(0xeef4ff, 0x557744, 1.2); // Sky/ground
+scene.add(hemiLight);
+
+// Main key light — front-right
+const dirLight = new THREE.DirectionalLight(0xffffff, 2.0);
+dirLight.position.set(3, 5, 6);
+dirLight.castShadow = true;
+dirLight.shadow.mapSize.set(1024, 1024);
+dirLight.shadow.camera.near = 0.5;
+dirLight.shadow.camera.far = 20;
+dirLight.shadow.bias = -0.0001;
+scene.add(dirLight);
+
+// Fill light — front-left (eliminates dark side)
+const fillLight = new THREE.DirectionalLight(0xddeeff, 1.2);
+fillLight.position.set(-4, 3, 5);
+scene.add(fillLight);
+
+// Back light — rim highlight
+const backLight = new THREE.DirectionalLight(0xaaccff, 0.8);
+backLight.position.set(0, 4, -4);
+scene.add(backLight);
+
+// Green glow light (follows character)
+const glowLight = new THREE.PointLight(CONFIG.glowColor, 0.6, 6);
+glowLight.position.set(0, 1.5, 1);
+scene.add(glowLight);
+
+// Rim light for dramatic green edge
+const rimLight = new THREE.PointLight(0x00ff66, 0.4, 6);
+rimLight.position.set(-2, 2, -1);
+scene.add(rimLight);
+
+// ── Character & Weapon containers ────────────────────────────────
+let characterGroup = new THREE.Group();
+characterGroup.position.set(0, CONFIG.groundY + CONFIG.floorOffset, 0);
+scene.add(characterGroup);
+
+let mixer = null;
+const animations = {};
+const actions = {};
+let currentAction = null;
+let characterMesh = null;
+let weaponMesh = null;
+let skeleton = null;
+
+// ═══════════════════════════════════════════════════════════════════
+// LOAD CHARACTER (FBX)
+// ═══════════════════════════════════════════════════════════════════
+const fbxLoader = new FBXLoader();
+const gltfLoader = new GLTFLoader();
+
+async function loadCharacter() {
+  return new Promise((resolve, reject) => {
+    fbxLoader.load(CONFIG.characterFBX, (fbx) => {
+      // Scale the character
+      fbx.scale.setScalar(CONFIG.characterScale * 0.01); // FBX is in cm
+
+      // Enable shadows & fix materials for brightness
+      fbx.traverse((child) => {
+        if (child.isMesh) {
+          child.castShadow = true;
+          child.receiveShadow = true;
+          if (child.material) {
+            const mats = Array.isArray(child.material) ? child.material : [child.material];
+            mats.forEach(mat => {
+              mat.side = THREE.DoubleSide;
+              // Convert Phong/Lambert to Standard for proper lighting
+              if (mat.isMeshPhongMaterial || mat.isMeshLambertMaterial) {
+                const stdMat = new THREE.MeshStandardMaterial({
+                  map: mat.map,
+                  normalMap: mat.normalMap || null,
+                  color: mat.color,
+                  side: THREE.DoubleSide,
+                  metalness: 0.1,
+                  roughness: 0.7,
+                });
+                if (mat.map) stdMat.map.encoding = THREE.sRGBEncoding;
+                child.material = stdMat;
+              } else {
+                if (mat.map) mat.map.encoding = THREE.sRGBEncoding;
+                if (mat.metalness !== undefined) mat.metalness = Math.min(mat.metalness, 0.3);
+                if (mat.roughness !== undefined) mat.roughness = Math.max(mat.roughness, 0.5);
+              }
+            });
+          }
+        }
+      });
+
+      characterMesh = fbx;
+      characterGroup.add(fbx);
+
+      // Set up AnimationMixer
+      mixer = new THREE.AnimationMixer(fbx);
+
+      // Store the T-pose animation if it came with the FBX
+      if (fbx.animations && fbx.animations.length > 0) {
+        const clip = fbx.animations[0];
+        clip.name = 'idle'; // rename the embedded animation
+        animations['idle'] = clip;
+        actions['idle'] = mixer.clipAction(clip);
+      }
+
+      // Find skeleton for weapon parenting
+      fbx.traverse((child) => {
+        if (child.isSkinnedMesh && child.skeleton) {
+          skeleton = child.skeleton;
+        }
+      });
+
+      console.log('[3D] Character loaded:', fbx.children.length, 'objects');
+      resolve(fbx);
+    }, 
+    (progress) => {
+      if (progress.total) {
+        const pct = Math.round(progress.loaded / progress.total * 100);
+        loadingEl.textContent = `LOADING BOSS... ${pct}%`;
+      }
+    },
+    reject);
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// LOAD WEAPON (GLB) & PARENT TO HAND
+// ═══════════════════════════════════════════════════════════════════
+async function loadWeapon() {
+  return new Promise((resolve, reject) => {
+    gltfLoader.load(CONFIG.weaponGLB, (gltf) => {
+      weaponMesh = gltf.scene;
+      weaponMesh.scale.setScalar(CONFIG.weaponScale);
+      weaponMesh.position.set(
+        CONFIG.weaponOffset.x,
+        CONFIG.weaponOffset.y,
+        CONFIG.weaponOffset.z
+      );
+      weaponMesh.rotation.set(
+        CONFIG.weaponRotation.x,
+        CONFIG.weaponRotation.y,
+        CONFIG.weaponRotation.z
+      );
+
+      // Enable shadows on weapon + ensure golden metallic look
+      weaponMesh.traverse((child) => {
+        if (child.isMesh) {
+          child.castShadow = true;
+          if (child.material) {
+            const mats = Array.isArray(child.material) ? child.material : [child.material];
+            mats.forEach(mat => {
+              if (mat.map) mat.map.encoding = THREE.sRGBEncoding;
+              // Keep weapon shiny/golden
+              if (mat.metalness !== undefined) mat.metalness = 0.6;
+              if (mat.roughness !== undefined) mat.roughness = 0.3;
+            });
+          }
+        }
+      });
+
+      // Try to parent to the right hand bone
+      let handBone = null;
+      if (characterMesh) {
+        characterMesh.traverse((child) => {
+          if (child.isBone && child.name === CONFIG.weaponBone) {
+            handBone = child;
+          }
+        });
+      }
+
+      if (handBone) {
+        handBone.add(weaponMesh);
+        console.log('[3D] Weapon parented to:', CONFIG.weaponBone);
+      } else {
+        // Fallback: add to character group with offset
+        console.warn('[3D] Hand bone not found, adding weapon to group');
+        characterGroup.add(weaponMesh);
+      }
+
+      resolve(gltf);
+    }, undefined, reject);
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// LOAD MIXAMO ANIMATIONS + EMBEDDED WALK
+// ═══════════════════════════════════════════════════════════════════
+const ANIM_FILES = {
+  'idle':   '/assets/animations/idle.fbx',
+  'wave':   '/assets/animations/wave.fbx',
+  'clap':   '/assets/animations/clap.fbx',
+  'think':  '/assets/animations/think.fbx',
+  'shrug':  '/assets/animations/shrug.fbx',
+  'dance':  '/assets/animations/dance.fbx',
+};
+
+// Programmatic walk animation (no FBX needed)
+function createWalkAnimation() {
+  const duration = 0.8; // seconds per cycle
+  const fps = 30;
+  const numFrames = Math.round(duration * fps);
+  const times = [];
+  for (let i = 0; i <= numFrames; i++) times.push(i / fps);
+
+  const tracks = [];
+  // Hip bob (up/down)
+  const hipY = times.map((t) => {
+    const phase = (t / duration) * Math.PI * 2;
+    return Math.abs(Math.sin(phase)) * 2; // 2cm bob
+  });
+  tracks.push(new THREE.NumberKeyframeTrack(
+    'mixamorigHips.position[1]', times,
+    hipY
+  ));
+
+  // Upper body slight sway
+  const spineZ = times.map((t) => {
+    const phase = (t / duration) * Math.PI * 2;
+    return Math.sin(phase) * 0.03;
+  });
+  tracks.push(new THREE.NumberKeyframeTrack(
+    'mixamorigSpine.quaternion[2]', times,
+    spineZ
+  ));
+
+  // Left leg forward/back
+  const leftLegX = times.map((t) => {
+    const phase = (t / duration) * Math.PI * 2;
+    return Math.sin(phase) * 0.3;
+  });
+  tracks.push(new THREE.NumberKeyframeTrack(
+    'mixamorigLeftUpLeg.quaternion[0]', times,
+    leftLegX
+  ));
+
+  // Right leg forward/back (opposite phase)
+  const rightLegX = times.map((t) => {
+    const phase = (t / duration) * Math.PI * 2;
+    return Math.sin(phase + Math.PI) * 0.3;
+  });
+  tracks.push(new THREE.NumberKeyframeTrack(
+    'mixamorigRightUpLeg.quaternion[0]', times,
+    rightLegX
+  ));
+
+  // Left lower leg bend
+  const leftShinX = times.map((t) => {
+    const phase = (t / duration) * Math.PI * 2;
+    return Math.max(0, Math.sin(phase)) * 0.4;
+  });
+  tracks.push(new THREE.NumberKeyframeTrack(
+    'mixamorigLeftLeg.quaternion[0]', times,
+    leftShinX
+  ));
+
+  // Right lower leg bend
+  const rightShinX = times.map((t) => {
+    const phase = (t / duration) * Math.PI * 2;
+    return Math.max(0, Math.sin(phase + Math.PI)) * 0.4;
+  });
+  tracks.push(new THREE.NumberKeyframeTrack(
+    'mixamorigRightLeg.quaternion[0]', times,
+    rightShinX
+  ));
+
+  // Arm counter-swing
+  const leftArmX = times.map((t) => {
+    const phase = (t / duration) * Math.PI * 2;
+    return Math.sin(phase + Math.PI) * 0.15;
+  });
+  tracks.push(new THREE.NumberKeyframeTrack(
+    'mixamorigLeftArm.quaternion[0]', times,
+    leftArmX
+  ));
+
+  const rightArmX = times.map((t) => {
+    const phase = (t / duration) * Math.PI * 2;
+    return Math.sin(phase) * 0.15;
+  });
+  tracks.push(new THREE.NumberKeyframeTrack(
+    'mixamorigRightArm.quaternion[0]', times,
+    rightArmX
+  ));
+
+  const clip = new THREE.AnimationClip('walk', duration, tracks);
+  return clip;
+}
+
+async function loadAnimations() {
+  let count = 0;
+  for (const [name, url] of Object.entries(ANIM_FILES)) {
+    try {
+      const fbx = await new Promise((res, rej) =>
+        fbxLoader.load(url, res, undefined, rej)
+      );
+      if (fbx.animations && fbx.animations[0]) {
+        const clip = fbx.animations[0];
+        clip.name = name;
+        animations[name] = clip;
+        actions[name] = mixer.clipAction(clip);
+        count++;
+        console.log(`[3D] Animation loaded: ${name}`);
+      }
+    } catch (e) {
+      console.warn(`[3D] Animation not found: ${name} (${url})`);
+    }
+  }
+
+  // Create embedded walk animation (no FBX download needed)
+  if (!animations['walk']) {
+    const walkClip = createWalkAnimation();
+    animations['walk'] = walkClip;
+    actions['walk'] = mixer.clipAction(walkClip);
+    count++;
+    console.log('[3D] Walk animation created (embedded)');
+  }
+
+  console.log(`[3D] ${count} animations loaded`);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// ANIMATION CONTROL
+// ═══════════════════════════════════════════════════════════════════
+function playAnim(name, fadeTime = 0.4, loop = true) {
+  if (!mixer || !actions[name]) {
+    console.warn(`[3D] Animation not available: ${name}`);
+    return false;
+  }
+  const next = actions[name];
+  next.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, loop ? Infinity : 1);
+  next.clampWhenFinished = !loop;
+
+  if (currentAction && currentAction !== next) {
+    next.reset().setEffectiveWeight(1).play();
+    currentAction.crossFadeTo(next, fadeTime, true);
+  } else if (!currentAction) {
+    next.reset().setEffectiveWeight(1).play();
+  }
+
+  if (!loop) {
+    const onDone = (e) => {
+      if (e.action === next) {
+        mixer.removeEventListener('finished', onDone);
+        playAnim('idle', 0.5, true);
+      }
+    };
+    mixer.addEventListener('finished', onDone);
+  }
+
+  currentAction = next;
+  state.currentAnimName = name;
+  return true;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// GREEN SMOKE PARTICLE SYSTEM
+// ═══════════════════════════════════════════════════════════════════
+const PARTICLE_COUNT = 60;
+const particleGeometry = new THREE.BufferGeometry();
+const particlePositions = new Float32Array(PARTICLE_COUNT * 3);
+const particleSizes = new Float32Array(PARTICLE_COUNT);
+const particleAlphas = new Float32Array(PARTICLE_COUNT);
+const particleVelocities = [];
+
+for (let i = 0; i < PARTICLE_COUNT; i++) {
+  particlePositions[i * 3] = 0;
+  particlePositions[i * 3 + 1] = -10; // Below screen = inactive
+  particlePositions[i * 3 + 2] = 0;
+  particleSizes[i] = 0;
+  particleAlphas[i] = 0;
+  particleVelocities.push({ vx: 0, vy: 0, vz: 0, life: 0, maxLife: 0 });
+}
+
+particleGeometry.setAttribute('position', new THREE.BufferAttribute(particlePositions, 3));
+particleGeometry.setAttribute('size', new THREE.BufferAttribute(particleSizes, 1));
+
+const particleMaterial = new THREE.PointsMaterial({
+  color: 0x66bb6a,
+  size: 0.1,
+  transparent: true,
+  opacity: 0.4,
+  blending: THREE.AdditiveBlending,
+  depthWrite: false,
+  sizeAttenuation: true,
+});
+
+const particles = new THREE.Points(particleGeometry, particleMaterial);
+scene.add(particles);
+
+let nextParticleIdx = 0;
+function spawnSmoke(count, x, y) {
+  for (let i = 0; i < count; i++) {
+    const idx = nextParticleIdx % PARTICLE_COUNT;
+    nextParticleIdx++;
+    particlePositions[idx * 3] = x + (Math.random() - 0.5) * 0.3;
+    particlePositions[idx * 3 + 1] = y + Math.random() * 0.5;
+    particlePositions[idx * 3 + 2] = (Math.random() - 0.5) * 0.3;
+    particleSizes[idx] = Math.random() * 0.1 + 0.05;
+    particleVelocities[idx] = {
+      vx: (Math.random() - 0.5) * 0.01,
+      vy: Math.random() * 0.015 + 0.005,
+      vz: (Math.random() - 0.5) * 0.01,
+      life: 1.0,
+      maxLife: 1.0 + Math.random() * 1.5,
+    };
+  }
+}
+
+function updateParticles(dt) {
+  for (let i = 0; i < PARTICLE_COUNT; i++) {
+    const v = particleVelocities[i];
+    if (v.life <= 0) continue;
+    v.life -= dt / v.maxLife;
+    if (v.life <= 0) {
+      particlePositions[i * 3 + 1] = -10;
+      particleSizes[i] = 0;
+      continue;
+    }
+    particlePositions[i * 3] += v.vx;
+    particlePositions[i * 3 + 1] += v.vy;
+    particlePositions[i * 3 + 2] += v.vz;
+    v.vy -= 0.0001; // slight gravity
+    particleSizes[i] = (0.05 + Math.random() * 0.05) * v.life;
+  }
+  particleGeometry.attributes.position.needsUpdate = true;
+  particleGeometry.attributes.size.needsUpdate = true;
+}
+
+// Idle smoke puff timer
+let lastSmokePuff = 0;
+function idleSmokePuff(t) {
+  if (t - lastSmokePuff > 4) {
+    const charX = characterGroup.position.x;
+    const charY = characterGroup.position.y + 1.5;
+    spawnSmoke(3, charX, charY);
+    lastSmokePuff = t;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// MOVEMENT SYSTEM
+// ═══════════════════════════════════════════════════════════════════
+function updateMovement() {
+  const dx = state.targetX - state.x;
+
+  if (Math.abs(dx) > 0.05) {
+    // Walking
+    if (!state.isWalking) {
+      state.isWalking = true;
+      playAnim('walk', 0.3, true); // Always available (embedded fallback)
+    }
+    // Move toward target
+    const step = Math.sign(dx) * CONFIG.moveSpeed;
+    state.x += step;
+    // Clamp to bounds
+    state.x = Math.max(-CONFIG.screenBoundsX, Math.min(CONFIG.screenBoundsX, state.x));
+
+    // Set target rotation (face direction of movement)
+    if (dx > 0) {
+      state.targetRotationY = -Math.PI / 2; // Face right
+    } else {
+      state.targetRotationY = Math.PI / 2;  // Face left
+    }
+  } else {
+    // Arrived at target
+    if (state.isWalking) {
+      state.isWalking = false;
+      playAnim('idle', 0.4, true);
+    }
+  }
+
+  // Smooth rotation
+  let rotDiff = state.targetRotationY - state.rotationY;
+  // Wrap rotation difference to [-PI, PI]
+  while (rotDiff > Math.PI) rotDiff -= 2 * Math.PI;
+  while (rotDiff < -Math.PI) rotDiff += 2 * Math.PI;
+  state.rotationY += rotDiff * CONFIG.turnSpeed;
+
+  // Apply to character group
+  characterGroup.position.x = state.x;
+  characterGroup.rotation.y = state.rotationY;
+
+  // Update glow light position
+  glowLight.position.x = state.x;
+}
+
+// Autonomous movement
+let lastAutoMove = Date.now();
+function autonomousMovement() {
+  const now = Date.now();
+  if (now - lastAutoMove > 20000 + Math.random() * 15000) {
+    if (!state.isWalking && Math.random() > 0.4) {
+      state.targetX = (Math.random() - 0.5) * CONFIG.screenBoundsX * 1.5;
+    }
+    lastAutoMove = now;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// GLOW & EFFECTS
+// ═══════════════════════════════════════════════════════════════════
+function updateGlow(t) {
+  const baseIntensity = CONFIG.glowIntensity[state.mode] || 0.3;
+  let pulse = 0;
+  if (state.mode === 'speaking') {
+    pulse = state.amplitude * 0.5;
+  } else if (state.mode === 'listening') {
+    pulse = Math.sin(t * 3) * 0.1;
+  } else if (state.mode === 'thinking') {
+    pulse = Math.sin(t * 5) * 0.15;
+  }
+  glowLight.intensity = baseIntensity + pulse;
+
+  // Extra smoke when speaking
+  if (state.mode === 'speaking' && state.amplitude > 0.4 && Math.random() > 0.7) {
+    spawnSmoke(1, state.x, characterGroup.position.y + 1.0);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// WEBSOCKET CONNECTION
+// ═══════════════════════════════════════════════════════════════════
+let ws = null;
+function connectWebSocket() {
+  const wsUrl = `ws://${window.location.host}/ws/mascot`;
+  ws = new WebSocket(wsUrl);
+
+  ws.onopen = () => console.log('[3D] WebSocket connected');
+
+  ws.onmessage = (event) => {
+    try {
+      const msg = JSON.parse(event.data);
+      handleServerMessage(msg);
+    } catch (e) {
+      console.warn('[3D] Invalid message:', event.data);
+    }
+  };
+
+  ws.onclose = () => {
+    console.log('[3D] WebSocket disconnected, reconnecting in 3s...');
+    setTimeout(connectWebSocket, 3000);
+  };
+
+  ws.onerror = () => ws.close();
+}
+
+function handleServerMessage(msg) {
+  switch (msg.type) {
+    case 'mode':
+      state.mode = msg.value;
+      updateModeTag();
+      break;
+    case 'amplitude':
+      state.amplitude = msg.value;
+      break;
+    case 'emotion':
+      state.emotion = msg.value;
+      break;
+    case 'subtitle':
+      showSubtitle(msg.value);
+      break;
+    case 'chat':
+      showChatBubble(msg.value.user, msg.value.message);
+      break;
+    case 'animation':
+      triggerAnimation(msg.value);
+      break;
+    case 'navigate':
+      navigateTo(msg.value);
+      break;
+  }
+}
+
+// ── Navigation ───────────────────────────────────────────────────
+function navigateTo(direction) {
+  switch (direction) {
+    case 'left':
+      state.targetX = -CONFIG.screenBoundsX * 0.7;
+      break;
+    case 'right':
+      state.targetX = CONFIG.screenBoundsX * 0.7;
+      break;
+    case 'center':
+      state.targetX = 0;
+      break;
+    case 'random':
+      state.targetX = (Math.random() - 0.5) * CONFIG.screenBoundsX * 1.5;
+      break;
+  }
+}
+
+// ── Trigger Animation ────────────────────────────────────────────
+function triggerAnimation(anim) {
+  switch (anim) {
+    case 'dance':
+      playAnim('dance', 0.4, false) || playAnim('wave', 0.4, false);
+      spawnSmoke(6, state.x, characterGroup.position.y + 1.0);
+      break;
+    case 'celebrate':
+      playAnim('clap', 0.4, false) || playAnim('wave', 0.4, false);
+      spawnSmoke(8, state.x, characterGroup.position.y + 1.5);
+      break;
+    case 'wave':
+      playAnim('wave', 0.4, false);
+      break;
+    case 'think':
+      playAnim('think', 0.4, false);
+      break;
+    case 'shrug':
+      playAnim('shrug', 0.4, false);
+      break;
+    case 'die':
+      // No die animation yet — do shrug as placeholder
+      playAnim('shrug', 0.4, false);
+      spawnSmoke(6, state.x, characterGroup.position.y + 0.5);
+      break;
+    case 'sleep':
+      // Placeholder
+      playAnim('idle', 0.4, true);
+      break;
+  }
+}
+
+// ── UI ───────────────────────────────────────────────────────────
+function updateModeTag() {
+  const labels = {
+    'idle': '', 'listening': '● LISTENING',
+    'thinking': '◆ PROCESSING', 'speaking': '▶ SPEAKING'
+  };
+  const label = labels[state.mode] || '';
+  if (label) {
+    modeTag.textContent = label;
+    modeTag.classList.add('visible');
+  } else {
+    modeTag.classList.remove('visible');
+  }
+}
+
+function positionUIElements() {
+  // Project character position to screen for UI placement
+  const charWorldPos = new THREE.Vector3(state.x, characterGroup.position.y + 2.2, 0);
+  charWorldPos.project(camera);
+  const screenX = (charWorldPos.x * 0.5 + 0.5) * window.innerWidth;
+  const screenY = (-charWorldPos.y * 0.5 + 0.5) * window.innerHeight;
+
+  modeTag.style.left = `${screenX - 40}px`;
+  modeTag.style.top = `${screenY - 30}px`;
+
+  chatBubble.style.left = `${screenX - 60}px`;
+  chatBubble.style.top = `${screenY - 50}px`;
+}
+
+let subtitleTimer = null;
+function showSubtitle(text) {
+  if (!text) { subtitleBar.classList.remove('visible', 'speaking'); return; }
+  subtitleBar.textContent = text;
+  subtitleBar.classList.add('visible');
+  if (state.mode === 'speaking') subtitleBar.classList.add('speaking');
+  clearTimeout(subtitleTimer);
+  subtitleTimer = setTimeout(() => subtitleBar.classList.remove('visible', 'speaking'), CONFIG.subtitleTimeout);
+}
+
+let chatBubbleTimer = null;
+function showChatBubble(user, message) {
+  chatBubble.innerHTML = `<strong style="color:#7cfc00">${user}:</strong> ${message}`;
+  chatBubble.classList.add('visible');
+  clearTimeout(chatBubbleTimer);
+  chatBubbleTimer = setTimeout(() => chatBubble.classList.remove('visible'), CONFIG.chatBubbleTimeout);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// TWITCH CHAT INTEGRATION
+// ═══════════════════════════════════════════════════════════════════
+function setupTwitchChat() {
+  if (typeof ComfyJS !== 'undefined') {
+    ComfyJS.onCommand = (user, command, message) => {
+      switch (command.toLowerCase()) {
+        case 'move':
+          if (['left','right','center','random'].includes(message.toLowerCase()))
+            navigateTo(message.toLowerCase());
+          break;
+        case 'dance': triggerAnimation('dance'); break;
+        case 'wave': triggerAnimation('wave'); break;
+        case 'pet': triggerAnimation('celebrate'); break;
+        case 'rip': triggerAnimation('die'); break;
+      }
+    };
+    ComfyJS.onChat = (user, message) => {
+      const lower = message.toLowerCase();
+      if (lower.includes('420') || lower.includes('blaze')) spawnSmoke(8, state.x, characterGroup.position.y + 1.0);
+      if (lower.includes('gg') || lower.includes('nice')) triggerAnimation('celebrate');
+    };
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// RENDER LOOP
+// ═══════════════════════════════════════════════════════════════════
+const clock = new THREE.Clock();
+
+function gameLoop() {
+  const dt = Math.min(clock.getDelta(), 0.05);
+  const t = clock.getElapsedTime();
+
+  // Update systems
+  updateMovement();
+  updateGlow(t);
+  updateParticles(dt);
+  idleSmokePuff(t);
+  autonomousMovement();
+  positionUIElements();
+
+  // Update animation mixer
+  if (mixer) mixer.update(dt);
+
+  // Render
+  renderer.render(scene, camera);
+  requestAnimationFrame(gameLoop);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// INITIALIZE
+// ═══════════════════════════════════════════════════════════════════
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+async function init() {
+  try {
+    loadingEl.textContent = 'LOADING CHARACTER...';
+    await loadCharacter();
+
+    loadingEl.textContent = 'LOADING WEAPON...';
+    await loadWeapon();
+
+    loadingEl.textContent = 'LOADING ANIMATIONS...';
+    await loadAnimations();
+
+    // Start idle animation
+    if (actions['idle']) {
+      playAnim('idle', 0, true);
+    }
+
+    // Position character initially at right side
+    state.x = CONFIG.screenBoundsX * 0.4;
+    state.targetX = state.x;
+    characterGroup.position.x = state.x;
+
+    // Hide loading
+    loadingEl.style.display = 'none';
+
+    // Connect WebSocket
+    connectWebSocket();
+    setupTwitchChat();
+
+    // Start render loop
+    gameLoop();
+
+    console.log('[3D] Bossiq420 Altyn Raid Boss 3D loaded 🎯');
+    console.log('[3D] Animations:', Object.keys(animations).join(', '));
+
+  } catch (error) {
+    console.error('[3D] Failed to load:', error);
+    loadingEl.textContent = 'LOAD FAILED — CHECK CONSOLE';
+    loadingEl.style.color = '#ff4444';
+  }
+}
+
+init();
+
+// ── Debug API (console) ──────────────────────────────────────────
+window.mascot = {
+  move: (dir) => navigateTo(dir),
+  anim: (name) => triggerAnimation(name),
+  play: (name) => playAnim(name, 0.4, false),
+  smoke: (n=5) => spawnSmoke(n, state.x, characterGroup.position.y + 1.0),
+  state: () => state,
+  anims: () => Object.keys(animations),
+  setMode: (m) => { state.mode = m; updateModeTag(); },
+  setAmp: (a) => { state.amplitude = a; },
+};
+
+</script>
+</body>
+</html>

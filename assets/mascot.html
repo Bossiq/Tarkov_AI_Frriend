@@ -1,0 +1,710 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PMC Overwatch — Bossiq420 Mascot</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;700&family=Orbitron:wght@500;700&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%;
+    background: transparent;
+    overflow: hidden;
+    font-family: 'Rajdhani', 'Segoe UI', Arial, sans-serif;
+  }
+  canvas { display: block; width: 100%; height: 100%; }
+
+  /* ── Subtitle Bar ─────────────────────────────────────── */
+  #subtitle-bar {
+    position: fixed;
+    bottom: 60px;
+    left: 50%;
+    transform: translateX(-50%);
+    max-width: 750px;
+    padding: 10px 24px;
+    background: rgba(0, 0, 0, 0.75);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    color: #e0ffe0;
+    font-size: 18px;
+    font-weight: 500;
+    letter-spacing: 0.5px;
+    border-radius: 8px;
+    text-align: center;
+    opacity: 0;
+    transition: opacity 0.4s ease, box-shadow 0.4s ease;
+    pointer-events: none;
+    text-shadow: 0 0 8px rgba(76, 175, 80, 0.5);
+    border: 1px solid rgba(76, 175, 80, 0.3);
+    box-shadow: 0 0 20px rgba(76, 175, 80, 0.1),
+                inset 0 0 20px rgba(76, 175, 80, 0.05);
+  }
+  #subtitle-bar.visible {
+    opacity: 1;
+    box-shadow: 0 0 30px rgba(76, 175, 80, 0.25),
+                inset 0 0 20px rgba(76, 175, 80, 0.08);
+  }
+  #subtitle-bar.speaking {
+    border-color: rgba(76, 175, 80, 0.6);
+    animation: subtitlePulse 2s ease-in-out infinite;
+  }
+  @keyframes subtitlePulse {
+    0%, 100% { box-shadow: 0 0 20px rgba(76, 175, 80, 0.2); }
+    50% { box-shadow: 0 0 35px rgba(76, 175, 80, 0.4); }
+  }
+
+  /* ── Chat Bubble ──────────────────────────────────────── */
+  #chat-bubble {
+    position: fixed;
+    padding: 8px 14px;
+    background: rgba(10, 10, 10, 0.9);
+    backdrop-filter: blur(8px);
+    color: #b0ffb0;
+    font-size: 14px;
+    font-weight: 500;
+    border-radius: 6px;
+    border: 1px solid rgba(76, 175, 80, 0.35);
+    opacity: 0;
+    transition: opacity 0.3s ease;
+    pointer-events: none;
+    max-width: 260px;
+    word-wrap: break-word;
+    box-shadow: 0 0 12px rgba(76, 175, 80, 0.15);
+  }
+  #chat-bubble::before {
+    content: '⌈';
+    position: absolute; top: -2px; left: 4px;
+    color: rgba(76, 175, 80, 0.5);
+    font-size: 16px;
+  }
+  #chat-bubble::after {
+    content: '⌋';
+    position: absolute; bottom: -2px; right: 4px;
+    color: rgba(76, 175, 80, 0.5);
+    font-size: 16px;
+  }
+  #chat-bubble.visible { opacity: 1; }
+
+  /* ── Mode Tag ─────────────────────────────────────────── */
+  #mode-tag {
+    position: fixed;
+    padding: 3px 10px;
+    background: rgba(0, 0, 0, 0.6);
+    color: rgba(76, 175, 80, 0.8);
+    font-family: 'Orbitron', monospace;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    border-radius: 4px;
+    border: 1px solid rgba(76, 175, 80, 0.2);
+    opacity: 0;
+    transition: opacity 0.3s ease;
+    pointer-events: none;
+  }
+  #mode-tag.visible { opacity: 1; }
+</style>
+</head>
+<body>
+<canvas id="mascot-canvas"></canvas>
+<div id="subtitle-bar"></div>
+<div id="chat-bubble"></div>
+<div id="mode-tag"></div>
+
+<script>
+// ═══════════════════════════════════════════════════════════════════
+// PMC OVERWATCH — BOSSIQ420 ALTYN RAID BOSS MASCOT
+// Sprite-based OBS Browser Source overlay
+// ═══════════════════════════════════════════════════════════════════
+
+const canvas = document.getElementById('mascot-canvas');
+const ctx = canvas.getContext('2d');
+const subtitleBar = document.getElementById('subtitle-bar');
+const chatBubble = document.getElementById('chat-bubble');
+const modeTag = document.getElementById('mode-tag');
+
+// Auto-size canvas to window
+function resizeCanvas() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+  CONFIG.groundY = canvas.height - 100;
+  state.y = CONFIG.groundY;
+  if (state.x > canvas.width - 100) state.x = canvas.width - 200;
+  if (state.targetX > canvas.width - 100) state.targetX = canvas.width - 200;
+}
+window.addEventListener('resize', resizeCanvas);
+
+// ── Configuration ────────────────────────────────────────────────
+const CONFIG = {
+  mascotHeight: 200,         // Rendered height of mascot sprite
+  groundY: 940,              // Y position (computed on resize)
+  moveSpeed: 2.0,            // Pixels per frame when walking
+  bobAmplitude: 3,           // Idle bobbing amplitude
+  bobSpeed: 0.025,           // Idle bobbing speed
+  smokeInterval: 3000,       // Idle smoke puff interval (ms)
+  walkFrameRate: 250,        // Walk frame switch interval (ms)
+  subtitleTimeout: 6000,     // How long subtitles stay visible
+  chatBubbleTimeout: 5000,   // How long chat bubbles stay
+  glowColor: '76, 175, 80',  // Green glow RGB
+};
+
+// ── Sprite Loading ───────────────────────────────────────────────
+const SPRITES = {};
+const SPRITE_NAMES = ['idle', 'talk', 'walk_1', 'walk_2', 'celebrate', 'dance', 'sleep', 'dead'];
+let spritesLoaded = 0;
+
+// Determine base path — works for both file:// and http:// serving
+const basePath = window.location.protocol === 'file:'
+  ? window.location.href.replace(/\/[^/]*$/, '/sprites/')
+  : '/assets/sprites/';
+
+SPRITE_NAMES.forEach(name => {
+  const img = new Image();
+  img.onload = () => {
+    spritesLoaded++;
+    console.log(`[Mascot] Sprite loaded: ${name} (${spritesLoaded}/${SPRITE_NAMES.length})`);
+  };
+  img.onerror = () => {
+    console.warn(`[Mascot] Failed to load sprite: ${name}`);
+  };
+  img.src = basePath + name + '.png';
+  SPRITES[name] = img;
+});
+
+// ── Mascot State ─────────────────────────────────────────────────
+const state = {
+  x: 300,
+  y: CONFIG.groundY,
+  targetX: 300,
+  mode: 'idle',              // idle, listening, thinking, speaking
+  emotion: 'neutral',
+  amplitude: 0,
+  facing: 1,                 // 1 = right, -1 = left
+  bobPhase: 0,
+  isWalking: false,
+  isDancing: false,
+  isSleeping: false,
+  isCelebrating: false,
+  isDead: false,
+  mouthOpen: 0,
+  walkFrame: 0,
+  lastWalkFrameSwitch: 0,
+  smokeParticles: [],
+  glowIntensity: 0,
+  currentSprite: 'idle',
+};
+
+// ── Smoke Particle System ────────────────────────────────────────
+class SmokeParticle {
+  constructor(x, y) {
+    this.x = x;
+    this.y = y;
+    this.vx = (Math.random() - 0.5) * 2;
+    this.vy = -Math.random() * 2 - 0.8;
+    this.size = Math.random() * 10 + 5;
+    this.life = 1.0;
+    this.decay = Math.random() * 0.012 + 0.006;
+    this.hue = 100 + Math.random() * 40; // Green range
+  }
+  update() {
+    this.x += this.vx;
+    this.y += this.vy;
+    this.vy -= 0.015;
+    this.vx *= 0.98;
+    this.size += 0.4;
+    this.life -= this.decay;
+  }
+  draw(ctx) {
+    if (this.life <= 0) return;
+    ctx.save();
+    ctx.globalAlpha = this.life * 0.4;
+    ctx.fillStyle = `hsla(${this.hue}, 60%, 55%, ${this.life * 0.4})`;
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+  get dead() { return this.life <= 0; }
+}
+
+// ── Determine Current Sprite ─────────────────────────────────────
+function getCurrentSprite() {
+  if (state.isDead) return 'dead';
+  if (state.isSleeping) return 'sleep';
+  if (state.isCelebrating) return 'celebrate';
+  if (state.isDancing) return 'dance';
+  if (state.mode === 'speaking' || state.mouthOpen > 0.1) return 'talk';
+  if (state.isWalking) {
+    return state.walkFrame === 0 ? 'walk_1' : 'walk_2';
+  }
+  return 'idle';
+}
+
+// ── Draw Mascot ──────────────────────────────────────────────────
+function drawMascot() {
+  const spriteName = getCurrentSprite();
+  state.currentSprite = spriteName;
+  const sprite = SPRITES[spriteName];
+  if (!sprite || !sprite.complete || sprite.naturalWidth === 0) return;
+
+  // Calculate dimensions preserving aspect ratio
+  const aspect = sprite.naturalWidth / sprite.naturalHeight;
+  const h = CONFIG.mascotHeight;
+  const w = h * aspect;
+
+  // Bobbing
+  const bob = (state.isSleeping || state.isDead) ? 0 : Math.sin(state.bobPhase) * CONFIG.bobAmplitude;
+
+  // Position
+  const drawX = state.x;
+  const drawY = state.y + bob;
+
+  ctx.save();
+  ctx.translate(drawX, drawY);
+
+  // Flip for facing direction
+  if (state.facing === -1) {
+    ctx.scale(-1, 1);
+  }
+
+  // ── Green Glow Aura ────────────────────────────────
+  const glowBase = 0.08;
+  let glowExtra = 0;
+  if (state.mode === 'speaking') {
+    glowExtra = 0.15 + state.mouthOpen * 0.2;
+  } else if (state.mode === 'listening') {
+    glowExtra = 0.08 + Math.sin(Date.now() / 400) * 0.05;
+  } else if (state.mode === 'thinking') {
+    glowExtra = 0.06 + Math.sin(Date.now() / 250) * 0.04;
+  }
+  if (state.isCelebrating || state.isDancing) {
+    glowExtra = 0.2 + Math.sin(Date.now() / 150) * 0.1;
+  }
+  state.glowIntensity = glowBase + glowExtra;
+
+  if (state.glowIntensity > 0.05) {
+    ctx.save();
+    ctx.globalAlpha = state.glowIntensity;
+    const glowSize = h * 0.6;
+    const gradient = ctx.createRadialGradient(0, -h * 0.3, 0, 0, -h * 0.3, glowSize);
+    gradient.addColorStop(0, `rgba(${CONFIG.glowColor}, 0.6)`);
+    gradient.addColorStop(0.5, `rgba(${CONFIG.glowColor}, 0.2)`);
+    gradient.addColorStop(1, `rgba(${CONFIG.glowColor}, 0)`);
+    ctx.fillStyle = gradient;
+    ctx.beginPath();
+    ctx.arc(0, -h * 0.3, glowSize, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // ── Shadow ─────────────────────────────────────────
+  ctx.save();
+  ctx.globalAlpha = 0.2;
+  ctx.fillStyle = '#000';
+  ctx.beginPath();
+  ctx.ellipse(0, 10, w * 0.3, 8, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  // ── Draw Sprite ────────────────────────────────────
+  ctx.drawImage(sprite, -w / 2, -h, w, h);
+
+  ctx.restore();
+}
+
+// ── WebSocket Connection ─────────────────────────────────────────
+let ws = null;
+let wsReconnectTimer = null;
+
+function connectWebSocket() {
+  const wsUrl = `ws://${window.location.host}/ws/mascot`;
+  ws = new WebSocket(wsUrl);
+
+  ws.onopen = () => {
+    console.log('[Mascot] WebSocket connected');
+  };
+
+  ws.onmessage = (event) => {
+    try {
+      const msg = JSON.parse(event.data);
+      handleServerMessage(msg);
+    } catch (e) {
+      console.warn('[Mascot] Invalid message:', event.data);
+    }
+  };
+
+  ws.onclose = () => {
+    console.log('[Mascot] WebSocket disconnected, reconnecting in 3s...');
+    wsReconnectTimer = setTimeout(connectWebSocket, 3000);
+  };
+
+  ws.onerror = () => {
+    console.warn('[Mascot] WebSocket error');
+    ws.close();
+  };
+}
+
+function handleServerMessage(msg) {
+  switch (msg.type) {
+    case 'mode':
+      state.mode = msg.value;
+      if (msg.value === 'speaking') {
+        state.isSleeping = false;
+        state.isDead = false;
+      }
+      updateModeTag();
+      break;
+    case 'amplitude':
+      state.mouthOpen = msg.value;
+      if (msg.value > 0.3 && Math.random() > 0.7) {
+        spawnSmoke(1);
+      }
+      break;
+    case 'emotion':
+      state.emotion = msg.value;
+      break;
+    case 'subtitle':
+      showSubtitle(msg.value);
+      break;
+    case 'chat':
+      showChatBubble(msg.value.user, msg.value.message);
+      break;
+    case 'animation':
+      triggerAnimation(msg.value);
+      break;
+    case 'navigate':
+      navigateTo(msg.value);
+      break;
+  }
+}
+
+// ── Mode Tag ─────────────────────────────────────────────────────
+function updateModeTag() {
+  const labels = {
+    'idle': '',
+    'listening': '● LISTENING',
+    'thinking': '◆ PROCESSING',
+    'speaking': '▶ SPEAKING'
+  };
+  const label = labels[state.mode] || '';
+  if (label) {
+    modeTag.textContent = label;
+    modeTag.classList.add('visible');
+  } else {
+    modeTag.classList.remove('visible');
+  }
+}
+
+// ── Position Mode Tag ────────────────────────────────────────────
+function positionModeTag() {
+  modeTag.style.left = `${state.x - 40}px`;
+  modeTag.style.top = `${state.y - CONFIG.mascotHeight - 25}px`;
+}
+
+// ── Subtitle Display ─────────────────────────────────────────────
+let subtitleTimer = null;
+function showSubtitle(text) {
+  if (!text) {
+    subtitleBar.classList.remove('visible', 'speaking');
+    return;
+  }
+  subtitleBar.textContent = text;
+  subtitleBar.classList.add('visible');
+  if (state.mode === 'speaking') {
+    subtitleBar.classList.add('speaking');
+  }
+  clearTimeout(subtitleTimer);
+  subtitleTimer = setTimeout(() => {
+    subtitleBar.classList.remove('visible', 'speaking');
+  }, CONFIG.subtitleTimeout);
+}
+
+// ── Chat Bubble ──────────────────────────────────────────────────
+let chatBubbleTimer = null;
+function showChatBubble(user, message) {
+  chatBubble.innerHTML = `<strong style="color:#7cfc00">${user}:</strong> ${message}`;
+  chatBubble.style.left = `${state.x - 60}px`;
+  chatBubble.style.top = `${state.y - CONFIG.mascotHeight - 50}px`;
+  chatBubble.classList.add('visible');
+  clearTimeout(chatBubbleTimer);
+  chatBubbleTimer = setTimeout(() => {
+    chatBubble.classList.remove('visible');
+  }, CONFIG.chatBubbleTimeout);
+}
+
+// ── Navigate ─────────────────────────────────────────────────────
+function navigateTo(direction) {
+  const margin = 120;
+  switch (direction) {
+    case 'left':
+      state.targetX = margin;
+      break;
+    case 'right':
+      state.targetX = canvas.width - margin;
+      break;
+    case 'center':
+      state.targetX = canvas.width / 2;
+      break;
+    case 'random':
+      state.targetX = margin + Math.random() * (canvas.width - margin * 2);
+      break;
+  }
+}
+
+// ── Trigger Animation ────────────────────────────────────────────
+function triggerAnimation(anim) {
+  switch (anim) {
+    case 'dance':
+      state.isDancing = true;
+      state.isSleeping = false;
+      state.isDead = false;
+      spawnSmoke(4);
+      setTimeout(() => { state.isDancing = false; }, 5000);
+      break;
+    case 'celebrate':
+      state.isCelebrating = true;
+      state.isSleeping = false;
+      state.isDead = false;
+      spawnSmoke(8);
+      setTimeout(() => { state.isCelebrating = false; }, 4000);
+      break;
+    case 'sleep':
+      state.isSleeping = true;
+      state.isDancing = false;
+      state.isCelebrating = false;
+      break;
+    case 'wake':
+      state.isSleeping = false;
+      break;
+    case 'die':
+      state.isDead = true;
+      state.isDancing = false;
+      state.isCelebrating = false;
+      spawnSmoke(6);
+      setTimeout(() => { state.isDead = false; }, 4000);
+      break;
+  }
+}
+
+// ── Smoke ─────────────────────────────────────────────────────────
+function spawnSmoke(count) {
+  const sx = state.x + state.facing * 20;
+  const sy = state.y - CONFIG.mascotHeight * 0.7;
+  for (let i = 0; i < count; i++) {
+    state.smokeParticles.push(new SmokeParticle(
+      sx + (Math.random() - 0.5) * 30,
+      sy + (Math.random() - 0.5) * 20
+    ));
+  }
+}
+
+let lastSmokePuff = 0;
+function idleSmokePuff() {
+  if (state.isSleeping || state.isDead) return;
+  const now = Date.now();
+  if (now - lastSmokePuff > CONFIG.smokeInterval) {
+    spawnSmoke(2);
+    lastSmokePuff = now;
+  }
+}
+
+// ── Autonomous Movement ──────────────────────────────────────────
+let lastAutoMove = Date.now();
+function autonomousMovement() {
+  if (state.isSleeping || state.isDead) return;
+  const now = Date.now();
+  if (now - lastAutoMove > 18000 + Math.random() * 15000) {
+    if (!state.isWalking && Math.random() > 0.4) {
+      const range = 350;
+      state.targetX = Math.max(120, Math.min(canvas.width - 120,
+        state.x + (Math.random() - 0.5) * range
+      ));
+    }
+    lastAutoMove = now;
+  }
+}
+
+// ── Main Update Loop ─────────────────────────────────────────────
+function update() {
+  // Walking
+  const dx = state.targetX - state.x;
+  if (Math.abs(dx) > 5) {
+    state.isWalking = true;
+    state.facing = dx > 0 ? 1 : -1;
+    state.x += Math.sign(dx) * CONFIG.moveSpeed;
+
+    // Alternate walk frames
+    const now = Date.now();
+    if (now - state.lastWalkFrameSwitch > CONFIG.walkFrameRate) {
+      state.walkFrame = state.walkFrame === 0 ? 1 : 0;
+      state.lastWalkFrameSwitch = now;
+    }
+  } else {
+    state.isWalking = false;
+  }
+
+  // Bobbing
+  if (!state.isDead) {
+    state.bobPhase += CONFIG.bobSpeed;
+  }
+
+  // Mouth smoothing when not speaking
+  if (state.mode !== 'speaking') {
+    state.mouthOpen *= 0.85;
+  }
+
+  // Smoke particles
+  state.smokeParticles = state.smokeParticles.filter(p => !p.dead);
+  state.smokeParticles.forEach(p => p.update());
+
+  // Auto behaviors
+  idleSmokePuff();
+  autonomousMovement();
+
+  // Position UI elements
+  positionModeTag();
+}
+
+// ── Main Render Loop ─────────────────────────────────────────────
+function render() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // Draw smoke particles (behind mascot)
+  state.smokeParticles.forEach(p => p.draw(ctx));
+
+  // Draw mascot
+  drawMascot();
+
+  // Ground glow effect
+  if (state.mode !== 'idle' || state.isDancing || state.isCelebrating) {
+    ctx.save();
+    let glowAlpha = 0.1;
+    let color = CONFIG.glowColor;
+    if (state.mode === 'speaking') {
+      glowAlpha = 0.15 + state.mouthOpen * 0.1;
+    } else if (state.mode === 'listening') {
+      glowAlpha = 0.1 + Math.sin(Date.now() / 300) * 0.05;
+    } else if (state.mode === 'thinking') {
+      color = '255, 170, 0';
+      glowAlpha = 0.1 + Math.sin(Date.now() / 200) * 0.05;
+    }
+    if (state.isDancing || state.isCelebrating) {
+      glowAlpha = 0.2;
+    }
+    ctx.globalAlpha = glowAlpha;
+    ctx.fillStyle = `rgba(${color}, 1)`;
+    ctx.beginPath();
+    ctx.ellipse(state.x, state.y + 10, 50, 10, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // Dancing sparkles
+  if (state.isDancing) {
+    for (let i = 0; i < 3; i++) {
+      ctx.save();
+      ctx.globalAlpha = Math.random() * 0.6 + 0.3;
+      const sx = state.x + (Math.random() - 0.5) * 120;
+      const sy = state.y + (Math.random() - 0.5) * 100 - CONFIG.mascotHeight / 2;
+      ctx.fillStyle = `hsl(${100 + Math.random() * 60}, 80%, 60%)`;
+      ctx.beginPath();
+      ctx.arc(sx, sy, Math.random() * 3 + 1.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  // Celebration effects
+  if (state.isCelebrating) {
+    for (let i = 0; i < 5; i++) {
+      ctx.save();
+      ctx.globalAlpha = Math.random() * 0.7 + 0.3;
+      const cx = state.x + (Math.random() - 0.5) * 180;
+      const cy = state.y - Math.random() * 160 - 30;
+      ctx.fillStyle = ['#4caf50', '#66bb6a', '#81c784', '#ffd54f', '#aed581'][Math.floor(Math.random() * 5)];
+      ctx.fillRect(cx, cy, 4, 8);
+      ctx.restore();
+    }
+  }
+}
+
+// ── Game Loop ────────────────────────────────────────────────────
+function gameLoop() {
+  update();
+  render();
+  requestAnimationFrame(gameLoop);
+}
+
+// ── Twitch Chat Integration (ComfyJS) ────────────────────────────
+// To enable: add ComfyJS CDN script tag before this script tag,
+// then uncomment the ComfyJS.Init() call below.
+function setupTwitchChat() {
+  if (typeof ComfyJS !== 'undefined') {
+    ComfyJS.onCommand = (user, command, message, flags) => {
+      switch (command.toLowerCase()) {
+        case 'move':
+          if (['left', 'right', 'center', 'random'].includes(message.toLowerCase())) {
+            navigateTo(message.toLowerCase());
+          }
+          break;
+        case 'dance':
+          triggerAnimation('dance');
+          break;
+        case 'sleep':
+          triggerAnimation('sleep');
+          break;
+        case 'wake':
+          triggerAnimation('wake');
+          break;
+        case 'pet':
+          triggerAnimation('celebrate');
+          break;
+        case 'rip':
+          triggerAnimation('die');
+          break;
+      }
+    };
+
+    ComfyJS.onChat = (user, message, flags) => {
+      const lower = message.toLowerCase();
+      if (lower.includes('420') || lower.includes('blaze')) {
+        spawnSmoke(6);
+      }
+      if (lower.includes('blyat') || lower.includes('cyka') || lower.includes('opachki')) {
+        state.emotion = 'excited';
+        spawnSmoke(3);
+        setTimeout(() => { state.emotion = 'neutral'; }, 3000);
+      }
+      if (lower.includes('gg') || lower.includes('nice')) {
+        triggerAnimation('celebrate');
+      }
+    };
+
+    ComfyJS.onSub = (user) => {
+      triggerAnimation('celebrate');
+      showChatBubble('🎉', `${user} just subscribed!`);
+    };
+
+    // ComfyJS.Init("Bossiq420");
+    console.log('[Mascot] ComfyJS ready (set channel to activate)');
+  }
+}
+
+// ── Initialize ───────────────────────────────────────────────────
+resizeCanvas();
+state.x = canvas.width - 250;
+state.targetX = state.x;
+state.y = CONFIG.groundY;
+
+connectWebSocket();
+setupTwitchChat();
+gameLoop();
+
+console.log('[Mascot] Bossiq420 Altyn Raid Boss loaded 🎯');
+console.log(`[Mascot] Canvas: ${canvas.width}×${canvas.height}`);
+console.log(`[Mascot] Sprites: loading ${SPRITE_NAMES.length} assets...`);
+</script>
+</body>
+</html>

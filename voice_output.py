@@ -2,8 +2,7 @@
 Voice Output — Multilingual TTS via edge-tts (Microsoft Neural Voices).
 
 Primary engine: edge-tts (neural voices for EN/RU/RO)
-Fallback: Kokoro ONNX (English only)
-Last resort: macOS `say` command
+Fallback: macOS `say` command
 
 Features:
   * Auto language detection (Cyrillic → Russian, Romanian chars → Romanian)
@@ -23,7 +22,6 @@ import subprocess
 import tempfile
 import threading
 import time
-import urllib.request
 from pathlib import Path
 from typing import Callable, Generator, Optional
 
@@ -33,13 +31,7 @@ import soundfile as sf
 
 logger = logging.getLogger(__name__)
 
-# ── Paths & URLs ─────────────────────────────────────────────────────
-_MODELS_DIR = Path(__file__).parent / "models"
-_ONNX_FILE = _MODELS_DIR / "kokoro-v1.0.onnx"
-_VOICES_FILE = _MODELS_DIR / "voices-v1.0.bin"
 
-_ONNX_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx"
-_VOICES_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin"
 
 # ── edge-tts Voice Mapping ───────────────────────────────────────────
 # Ava Multilingual is Microsoft's flagship neural voice (2024) —
@@ -316,8 +308,6 @@ class VoiceOutput:
         self._speed = float(os.getenv("TTS_SPEED", str(_DEFAULT_SPEED)))
         self._lang = os.getenv("TTS_LANG", _DEFAULT_LANG)
         self._edge_rate = os.getenv("EDGE_RATE", _DEFAULT_EDGE_RATE)
-        self._kokoro = None
-        self._kokoro_lock = threading.Lock()
         self._edge_available = False
         self._language_hint: str = "en"          # Hint from Whisper detection
         self._response_lang: Optional[str] = None  # Locked lang for current response
@@ -343,10 +333,7 @@ class VoiceOutput:
             self._edge_available = True
             logger.info("edge-tts available (multilingual neural voices)")
         except ImportError:
-            logger.warning("edge-tts not installed -- falling back to Kokoro")
-
-        # Initialize Kokoro in background as fallback
-        threading.Thread(target=self._init_kokoro, name="KokoroInit", daemon=True).start()
+            logger.warning("edge-tts not installed -- falling back to macOS say")
 
     # ── Interrupt control ─────────────────────────────────────────────
     def was_interrupted(self) -> bool:
@@ -358,27 +345,7 @@ class VoiceOutput:
         self._interrupt.clear()
         self._was_interrupted = False
 
-    # ── Kokoro initialisation ─────────────────────────────────────────
-    def _init_kokoro(self) -> None:
-        try:
-            self._ensure_model_files()
-            from kokoro_onnx import Kokoro
-            self._kokoro = Kokoro(str(_ONNX_FILE), str(_VOICES_FILE))
-            logger.info("Kokoro TTS loaded as fallback (voice=%s)", self._voice)
-        except Exception:
-            logger.exception("Failed to load Kokoro fallback")
-            self._kokoro = None
 
-    def _ensure_model_files(self) -> None:
-        _MODELS_DIR.mkdir(exist_ok=True)
-        for path, url, label in [
-            (_ONNX_FILE, _ONNX_URL, "model"),
-            (_VOICES_FILE, _VOICES_URL, "voices"),
-        ]:
-            if not path.exists():
-                logger.info("Downloading Kokoro %s -> %s ...", label, path.name)
-                urllib.request.urlretrieve(url, path)
-                logger.info("Downloaded %s (%.1f MB)", path.name, path.stat().st_size / 1e6)
 
     # ══════════════════════════════════════════════════════════════════
     #  AUDIO PLAYBACK WITH AMPLITUDE CALLBACK
@@ -602,10 +569,7 @@ class VoiceOutput:
         if self._edge_available and self._speak_edge(clean, lang):
             return
 
-        if self._kokoro is not None:
-            self._speak_kokoro(clean)
-        else:
-            self._speak_say(clean, lang)
+        self._speak_say(clean, lang)
 
     def set_language_hint(self, lang: str) -> None:
         """Set language hint from Whisper STT for the upcoming response."""
@@ -659,10 +623,8 @@ class VoiceOutput:
             spoke = False
             if self._edge_available:
                 spoke = self._speak_edge(clean, lang)
-            if not spoke and self._kokoro is not None:
-                self._speak_kokoro(clean)
-            elif not spoke:
-                self._speak_say(clean)
+            if not spoke:
+                self._speak_say(clean, lang)
 
             # Check again after speaking (playback might have been cut)
             if self._interrupt.is_set():
@@ -672,18 +634,7 @@ class VoiceOutput:
                     pass
                 break
 
-    # ── Kokoro single sentence ────────────────────────────────────────
-    def _speak_kokoro(self, text: str) -> None:
-        try:
-            with self._kokoro_lock:
-                samples, sr = self._kokoro.create(
-                    text, voice=self._voice, speed=self._speed, lang=self._lang,
-                )
-            processed = self._postprocess_audio(samples, sr)
-            self._play_with_amplitude(processed, sr)
-        except Exception:
-            logger.exception("Kokoro TTS failed -- falling back to 'say'")
-            self._speak_say(text)
+
 
     # ── Platform fallback ─────────────────────────────────────────────
     def _speak_say(self, text: str, lang: str = "en") -> None:

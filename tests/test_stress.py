@@ -219,23 +219,23 @@ class TestSoundEffects:
 # ═══════════════════════════════════════════════════════════════════════
 #  DASHBOARD TESTS
 # ═══════════════════════════════════════════════════════════════════════
-class TestDashboard:
-    """Tests for the web dashboard module."""
+class TestMascotServer:
+    """Tests for the mascot server module."""
 
     def test_import(self):
-        from dashboard import Dashboard
-        assert Dashboard is not None
+        from mascot_server import MascotServer
+        assert MascotServer is not None
 
     def test_read_env(self):
         """Read .env file returns a non-empty dict."""
-        from dashboard import _read_env_dict
+        from mascot_server import _read_env_dict
         config = _read_env_dict()
         assert isinstance(config, dict)
         assert len(config) > 0, "No config loaded from .env"
 
     def test_sanitize_keys(self):
         """Sensitive keys are properly masked."""
-        from dashboard import _sanitize_config
+        from mascot_server import _sanitize_config
         config = {
             "GROQ_API_KEY": "gsk_abc123def456",
             "GEMINI_API_KEY": "AIzaSy123456",
@@ -248,7 +248,7 @@ class TestDashboard:
 
     def test_sanitize_preserves_prefix_suffix(self):
         """Masked keys keep first 4 and last 4 chars."""
-        from dashboard import _sanitize_config
+        from mascot_server import _sanitize_config
         config = {"GROQ_API_KEY": "gsk_lBEfpjFS6aq5pegWawOh"}
         sanitized = _sanitize_config(config)
         key = sanitized["GROQ_API_KEY"]
@@ -324,7 +324,7 @@ class TestCrossPlatform:
     def test_all_modules_import(self):
         """All project modules import without OS-specific errors."""
         modules = [
-            "video_capture", "sound_effects", "dashboard",
+            "video_capture", "sound_effects", "mascot_server",
             "brain", "expression_engine", "logging_config",
             "tarkov_data",
         ]

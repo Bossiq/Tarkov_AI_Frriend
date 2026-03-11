@@ -11,15 +11,12 @@ sounddevice
 soundfile
 numpy
 ollama
-kokoro-onnx
 python-dotenv
-customtkinter
 Pillow
 edge-tts
 google-genai
 mss
 fastapi
 uvicorn
-pywebview
 noisereduce
 scipy

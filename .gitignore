@@ -9,6 +9,9 @@ build/
 # ── Environment ───────────────────────────────────────────────────────
 .env
 
+# ── Private project files (not for public GitHub) ────────────────────
+PROJECT_KNOWLEDGE.md
+
 # ── Virtual environments ──────────────────────────────────────────────
 venv/
 venv2/

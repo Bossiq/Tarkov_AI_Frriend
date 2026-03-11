@@ -18,7 +18,9 @@ import atexit
 import logging
 import os
 import re
+import shutil
 import signal
+import subprocess
 import threading
 import time
 from typing import Optional
@@ -64,6 +66,10 @@ class PMCOverwatch:
         self._processing_lock = threading.Lock()
         self._listen_active = False
         self._interrupt_event = threading.Event()
+
+        # ── Ollama subprocess management ──────────────────────────────
+        self._ollama_proc: Optional[subprocess.Popen] = None
+        self._ollama_we_started = False  # True if WE spawned Ollama
 
         # ── Screen Capture ────────────────────────────────────────────
         screen_enabled = os.getenv("SCREEN_CAPTURE", "true").lower() in ("true", "1")
@@ -134,9 +140,71 @@ class PMCOverwatch:
     def _set_emotion(self, emotion: str) -> None:
         self._mascot.set_emotion(emotion)
 
+    # ── Ollama Lifecycle ───────────────────────────────────────────────
+    def _start_ollama(self) -> None:
+        """Ensure Ollama is running. Start it if not."""
+        # Check if ollama binary is available
+        ollama_bin = shutil.which("ollama")
+        if not ollama_bin:
+            self.log("[Ollama] Binary not found — skip auto-start")
+            return
+
+        # Check if already running (another instance or user-started)
+        try:
+            result = subprocess.run(
+                ["pgrep", "-x", "ollama"],
+                capture_output=True, timeout=3,
+            )
+            if result.returncode == 0:
+                self.log("[Ollama] Already running — reusing existing instance")
+                return
+        except Exception:
+            pass  # pgrep might not exist on all systems
+
+        # Start Ollama as a background subprocess
+        self.log("[Ollama] Starting server...")
+        try:
+            self._ollama_proc = subprocess.Popen(
+                ["ollama", "serve"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            self._ollama_we_started = True
+            # Give it a moment to bind the port
+            time.sleep(2.0)
+            self.log("[Ollama] Server started (PID %d)" % self._ollama_proc.pid)
+            logger.info("Ollama auto-started (PID %d)", self._ollama_proc.pid)
+        except FileNotFoundError:
+            self.log("[Ollama] Could not start — 'ollama' command not found")
+        except Exception:
+            logger.exception("Failed to start Ollama")
+            self.log("[!] Ollama auto-start failed")
+
+    def _stop_ollama(self) -> None:
+        """Stop Ollama if we started it."""
+        if not self._ollama_we_started or self._ollama_proc is None:
+            return
+        try:
+            self._ollama_proc.terminate()
+            self._ollama_proc.wait(timeout=5)
+            self.log("[Ollama] Server stopped")
+            logger.info("Ollama auto-stopped")
+        except subprocess.TimeoutExpired:
+            self._ollama_proc.kill()
+            self.log("[Ollama] Server force-killed")
+            logger.warning("Ollama force-killed")
+        except Exception:
+            logger.exception("Error stopping Ollama")
+        finally:
+            self._ollama_proc = None
+            self._ollama_we_started = False
+
     # ── Initialization ────────────────────────────────────────────────
     def start(self) -> None:
         """Start all subsystems."""
+        # Auto-start Ollama if needed
+        self._start_ollama()
+
         # Start mascot server
         if self._mascot.available:
             self._mascot.start()
@@ -209,6 +277,7 @@ class PMCOverwatch:
         self._shutdown.set()
         self._screen.stop()
         self._mascot.stop()
+        self._stop_ollama()
         self.log("System stopped.")
         logger.info("Application exited")
 
@@ -563,6 +632,9 @@ def main() -> None:
     asyncio.set_event_loop(loop)
 
     system = PMCOverwatch()
+
+    # Register atexit to ensure Ollama cleanup even on crashes
+    atexit.register(system._stop_ollama)
 
     # Signal handlers for clean shutdown
     def _signal_handler(signum, frame):

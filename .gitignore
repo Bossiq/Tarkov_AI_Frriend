@@ -63,3 +63,4 @@ OllamaSetup.exe
 
 logs/.cache/
 logs/
+.cache/

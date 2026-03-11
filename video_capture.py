@@ -200,6 +200,8 @@ class ScreenCapture:
         buf = io.BytesIO()
         img.save(buf, format="JPEG", quality=_JPEG_QUALITY)
         jpeg_bytes = buf.getvalue()
+        buf.close()
+        img.close()  # Free PIL image memory immediately
 
         # Store (thread-safe)
         with self._lock:

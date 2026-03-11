@@ -30,6 +30,7 @@ ANIM_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "a
 # Required animations — search these names on Mixamo
 ANIMATIONS = {
     "idle.fbx":         "Breathing Idle",
+    "walk.fbx":         "Walking",
     "wave.fbx":         "Waving",
     "clap.fbx":         "Clapping",
     "think.fbx":        "Thinking",

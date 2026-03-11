@@ -407,25 +407,18 @@ LLM_GESTURE_PROMPT = (
     "ANYWHERE in your response. Use at most ONE gesture per response.\n\n"
     "Available animations:\n"
     "- [gesture:wave] — wave hello/goodbye\n"
-    "- [gesture:salute] — military salute\n"
-    "- [gesture:thumbsUp] — thumbs up, approval\n"
     "- [gesture:think] — thinking pose, hand on chin\n"
     "- [gesture:shrug] — shrug, don't know\n"
-    "- [gesture:point] — pointing at something\n"
-    "- [gesture:crossArms] — arms crossed, confident\n"
-    "- [gesture:facepalm] — facepalm, disappointment\n"
     "- [gesture:clap] — clapping, applause\n"
-    "- [gesture:celebrate] — victory celebration\n"
-    "- [gesture:nod] — nodding yes\n"
-    "- [gesture:headShake] — shaking head no\n"
-    "- [gesture:bow] — bowing, respect\n"
-    "- [gesture:dance] — dancing, having fun\n"
-    "- [gesture:laugh] — laughing animation\n\n"
+    "- [gesture:dance] — dancing, having fun\n\n"
+    # NOTE: Add more gestures here as FBX files are downloaded from Mixamo.
+    # Available in download_animations.py: salute, thumbsUp, point, crossArms,
+    # facepalm, celebrate, nod, headShake, bow, laugh
     "USE GESTURES NATURALLY. Examples:\n"
     "- User says hello → [gesture:wave] Hey there!\n"
-    "- Amazing play → [gesture:celebrate] That was insane!\n"
+    "- Amazing play → [gesture:clap] That was insane!\n"
     "- Asked to dance → [gesture:dance] Let's go!\n"
     "- Thinking hard → [gesture:think] Hmm, let me see.\n"
-    "- Something funny → [gesture:laugh] Haha that's hilarious!\n"
     "- Do not force gestures, only use when natural.\n"
 )
+

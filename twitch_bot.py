@@ -12,6 +12,11 @@ Commands:
   !clap          — mascot claps
   !think         — mascot does thinking pose
   !shrug         — mascot shrugs
+  !salute        — mascot salutes
+  !crouch        — mascot crouches
+  !die           — mascot dies (dramatic)
+  !win           — mascot victory pose
+  !ask <text>    — ask the AI a question directly
   !status        — show AI engine status + uptime
 """
 
@@ -167,6 +172,55 @@ class TwitchBot(commands.Bot):
             return
         if self._mascot_ref and hasattr(self._mascot_ref, 'send_animation'):
             self._mascot_ref.send_animation("shrug")
+
+    @commands.command()
+    async def salute(self, ctx: commands.Context) -> None:
+        """Trigger salute animation."""
+        if not self._check_cooldown(ctx.author.name, "salute"):
+            return
+        if self._mascot_ref and hasattr(self._mascot_ref, 'send_animation'):
+            self._mascot_ref.send_animation("salute")
+
+    @commands.command()
+    async def crouch(self, ctx: commands.Context) -> None:
+        """Trigger crouch animation."""
+        if not self._check_cooldown(ctx.author.name, "crouch"):
+            return
+        if self._mascot_ref and hasattr(self._mascot_ref, 'send_animation'):
+            self._mascot_ref.send_animation("crouch")
+
+    @commands.command()
+    async def die(self, ctx: commands.Context) -> None:
+        """Trigger die animation."""
+        if not self._check_cooldown(ctx.author.name, "die"):
+            return
+        if self._mascot_ref and hasattr(self._mascot_ref, 'send_animation'):
+            self._mascot_ref.send_animation("die")
+
+    @commands.command()
+    async def win(self, ctx: commands.Context) -> None:
+        """Trigger win/victory animation."""
+        if not self._check_cooldown(ctx.author.name, "win"):
+            return
+        if self._mascot_ref and hasattr(self._mascot_ref, 'send_animation'):
+            self._mascot_ref.send_animation("win")
+
+    @commands.command()
+    async def ask(self, ctx: commands.Context) -> None:
+        """Ask the AI a question directly: !ask <your question>"""
+        if not self._check_cooldown(ctx.author.name, "ask"):
+            return
+        parts = ctx.message.content.split(maxsplit=1)
+        if len(parts) < 2 or not parts[1].strip():
+            await ctx.send(f"@{ctx.author.name} Usage: !ask <your question>")
+            return
+        question = parts[1].strip()
+        if self._message_callback:
+            if asyncio.iscoroutinefunction(self._message_callback):
+                await self._message_callback(ctx.author.name, question)
+            else:
+                self._message_callback(ctx.author.name, question)
+            logger.info("Twitch !ask by %s: %s", ctx.author.name, question[:60])
 
     @commands.command()
     async def status(self, ctx: commands.Context) -> None:

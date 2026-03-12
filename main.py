@@ -101,7 +101,7 @@ from voice_output import VoiceOutput  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
-__version__ = "0.27.0"
+__version__ = "0.28.0"
 
 
 class PMCOverwatch:
@@ -158,6 +158,7 @@ class PMCOverwatch:
             port=port,
             get_status=self._get_status,
             clear_memory=lambda: self._brain.clear_memory() if self._brain else None,
+            on_config_change=self._on_config_change,
         )
 
         # ── Voice I/O ─────────────────────────────────────────────────
@@ -189,7 +190,7 @@ class PMCOverwatch:
         self._mascot.set_mode("speaking")
 
     def _on_speak_end(self) -> None:
-        self._mascot.set_mode("thinking")
+        self._mascot.set_mode("listening")
 
     def _on_amplitude(self, amp: float) -> None:
         self._mascot.set_amplitude(amp)
@@ -199,6 +200,38 @@ class PMCOverwatch:
 
     def _set_emotion(self, emotion: str) -> None:
         self._mascot.set_emotion(emotion)
+
+    def _on_config_change(self, updates: dict) -> None:
+        """Hot-reload settings changed via the dashboard."""
+        for key, value in updates.items():
+            try:
+                if key == "TTS_VOICE":
+                    self._vo.voice = value
+                    self.log(f"[Settings] TTS voice → {value}")
+                elif key == "TTS_SPEED":
+                    self._vo.speed = float(value)
+                    self.log(f"[Settings] TTS speed → {value}")
+                elif key == "SFX_VOLUME" and self._sfx:
+                    self._sfx.set_volume(float(value))
+                    self.log(f"[Settings] SFX volume → {value}")
+                elif key == "SFX_ENABLED" and self._sfx:
+                    self._sfx.set_enabled(value.lower() in ("true", "1", "yes"))
+                    self.log(f"[Settings] SFX → {value}")
+                elif key == "SCREEN_CAPTURE":
+                    enabled = value.lower() in ("true", "1")
+                    if enabled and not self._screen_enabled:
+                        self._screen_enabled = True
+                        self._screen.start()
+                        self.log("[Settings] Screen capture enabled")
+                    elif not enabled and self._screen_enabled:
+                        self._screen_enabled = False
+                        self._screen.stop()
+                        self.log("[Settings] Screen capture disabled")
+                elif key == "SCREEN_COMMENTARY_INTERVAL":
+                    self._screen_commentary_interval = int(value)
+                    self.log(f"[Settings] Commentary interval → {value}s")
+            except Exception:
+                logger.exception("Failed to apply setting: %s=%s", key, value)
 
     # ── Ollama Lifecycle ───────────────────────────────────────────────
     def _start_ollama(self) -> None:

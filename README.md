@@ -7,7 +7,7 @@
 <p align="center">
   <strong>Real-time AI voice companion for Escape from Tarkov streaming</strong><br/>
   3D Animated Mascot • Triple-Engine LLM • Neural Voice • Twitch Integration<br/>
-  <sub>v0.26.0</sub>
+  <sub>v0.28.0</sub>
 </p>
 
 <p align="center">

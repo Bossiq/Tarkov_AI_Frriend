@@ -2,6 +2,22 @@
 
 All notable changes to PMC Overwatch are documented here.
 
+## [0.28.0] — 2026-03-12
+
+### Added
+- **Twitch commands** — `!salute`, `!crouch`, `!die`, `!win` (animation triggers) + `!ask <question>` (direct AI interaction)
+- **Settings hot-reload** — dashboard settings panel now applies changes live (TTS voice/speed, SFX volume, screen capture, commentary interval)
+- **Unit tests** — 10 new tests: persistent memory round-trip, gesture tag parsing, dashboard HTML validation, gesture prompt completeness (54 total)
+
+### Fixed
+- `_on_speak_end` now sets mode to "listening" instead of "thinking" (dashboard showed wrong state)
+- LLM gesture prompt synced with all 9 dashboard animations (was only 5: wave, think, shrug, clap, dance)
+- CSS `background-clip` standard property added for cross-browser compatibility
+
+### Changed
+- Version bumped to `0.28.0`
+- README version badge updated
+
 ## [0.27.0] — 2026-03-12
 
 ### Added

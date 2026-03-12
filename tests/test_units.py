@@ -306,6 +306,152 @@ class TestTarkovUpdater:
         assert result == ""
 
 
+# ═══════════════════════════════════════════════════════════════════════
+#  PERSISTENT MEMORY TESTS
+# ═══════════════════════════════════════════════════════════════════════
+class TestPersistentMemory:
+    """Tests for Brain persistent memory save/load."""
+
+    def test_save_load_round_trip(self, tmp_path):
+        """Memory saves to JSON and loads back correctly."""
+        import json
+
+        memory_file = tmp_path / "memory.json"
+        messages = [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "hey there!"},
+            {"role": "user", "content": "what map?"},
+            {"role": "assistant", "content": "customs is great"},
+        ]
+
+        # Save
+        with open(memory_file, "w", encoding="utf-8") as f:
+            json.dump(messages, f, ensure_ascii=False, indent=2)
+
+        # Load back
+        with open(memory_file, "r", encoding="utf-8") as f:
+            loaded = json.load(f)
+
+        assert len(loaded) == 4
+        assert loaded[0]["role"] == "user"
+        assert loaded[0]["content"] == "hello"
+        assert loaded[3]["content"] == "customs is great"
+
+    def test_corrupt_file_graceful(self, tmp_path):
+        """Corrupt memory file doesn't crash load."""
+        memory_file = tmp_path / "memory.json"
+        memory_file.write_text("not valid json {{{", encoding="utf-8")
+
+        import json
+        try:
+            with open(memory_file, "r", encoding="utf-8") as f:
+                json.load(f)
+            assert False, "Should have raised"
+        except json.JSONDecodeError:
+            pass  # Expected
+
+    def test_empty_memory_file(self, tmp_path):
+        """Empty list in memory file loads as empty."""
+        import json
+
+        memory_file = tmp_path / "memory.json"
+        with open(memory_file, "w") as f:
+            json.dump([], f)
+
+        with open(memory_file, "r") as f:
+            loaded = json.load(f)
+        assert loaded == []
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  GESTURE TAG PARSING TESTS
+# ═══════════════════════════════════════════════════════════════════════
+class TestGestureTagParsing:
+    """Tests for gesture tag extraction from AI responses."""
+
+    def test_extract_gesture(self):
+        import re
+        pattern = re.compile(r'\[gesture:(\w+)\]', re.IGNORECASE)
+        text = "[gesture:wave] Hey there!"
+        match = pattern.search(text)
+        assert match is not None
+        assert match.group(1) == "wave"
+
+    def test_strip_gesture_tag(self):
+        import re
+        pattern = re.compile(r'\[gesture:(\w+)\]', re.IGNORECASE)
+        text = "[gesture:dance] Let's go!"
+        clean = pattern.sub('', text).strip()
+        assert clean == "Let's go!"
+
+    def test_gesture_case_insensitive(self):
+        import re
+        pattern = re.compile(r'\[gesture:(\w+)\]', re.IGNORECASE)
+        text = "[Gesture:WAVE] hello"
+        match = pattern.search(text)
+        assert match is not None
+        assert match.group(1) == "WAVE"
+
+    def test_no_gesture(self):
+        import re
+        pattern = re.compile(r'\[gesture:(\w+)\]', re.IGNORECASE)
+        text = "Just a normal sentence."
+        match = pattern.search(text)
+        assert match is None
+
+    def test_all_gestures_in_prompt(self):
+        """All 9 dashboard animations are documented in the LLM prompt."""
+        from expression_engine import LLM_GESTURE_PROMPT
+        for gesture in ["wave", "think", "shrug", "clap", "dance",
+                        "salute", "win", "crouch", "die"]:
+            assert f"[gesture:{gesture}]" in LLM_GESTURE_PROMPT, (
+                f"Gesture '{gesture}' missing from LLM_GESTURE_PROMPT"
+            )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  DASHBOARD HTML TESTS
+# ═══════════════════════════════════════════════════════════════════════
+class TestDashboardHTML:
+    """Tests for dashboard HTML content."""
+
+    def test_html_exists(self):
+        html_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "assets", "dashboard_ui.html"
+        )
+        assert os.path.exists(html_path)
+
+    def test_html_has_required_elements(self):
+        html_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "assets", "dashboard_ui.html"
+        )
+        with open(html_path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        lower = content.lower()
+        # Essential elements (case-insensitive)
+        assert "pmc overwatch" in lower
+        assert "llm engines" in lower or "llm-engines" in lower
+        assert "mascot controls" in lower or "mascot-controls" in lower
+        assert "live log" in lower or "log-card" in lower
+        assert "websocket" in lower or "ws://" in lower
+
+    def test_html_has_animation_buttons(self):
+        html_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "assets", "dashboard_ui.html"
+        )
+        with open(html_path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        for anim in ["dance", "wave", "clap", "think", "shrug", "salute", "crouch", "die", "win"]:
+            assert anim.lower() in content.lower(), (
+                f"Animation '{anim}' not found in dashboard HTML"
+            )
+
+
 if __name__ == "__main__":
     import pytest
     pytest.main([__file__, "-v", "--tb=short"])

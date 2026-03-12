@@ -410,15 +410,19 @@ LLM_GESTURE_PROMPT = (
     "- [gesture:think] — thinking pose, hand on chin\n"
     "- [gesture:shrug] — shrug, don't know\n"
     "- [gesture:clap] — clapping, applause\n"
-    "- [gesture:dance] — dancing, having fun\n\n"
-    # NOTE: Add more gestures here as FBX files are downloaded from Mixamo.
-    # Available in download_animations.py: salute, thumbsUp, point, crossArms,
-    # facepalm, celebrate, nod, headShake, bow, laugh
+    "- [gesture:dance] — dancing, having fun\n"
+    "- [gesture:salute] — military salute, respect\n"
+    "- [gesture:win] — victory celebration, fist pump\n"
+    "- [gesture:crouch] — crouch down, take cover\n"
+    "- [gesture:die] — dramatic death, fall over\n\n"
     "USE GESTURES NATURALLY. Examples:\n"
     "- User says hello → [gesture:wave] Hey there!\n"
     "- Amazing play → [gesture:clap] That was insane!\n"
     "- Asked to dance → [gesture:dance] Let's go!\n"
     "- Thinking hard → [gesture:think] Hmm, let me see.\n"
+    "- Big victory → [gesture:win] We crushed it!\n"
+    "- Show respect → [gesture:salute] o7 commander\n"
+    "- Player dies → [gesture:die] That's it for me...\n"
     "- Do not force gestures, only use when natural.\n"
 )
 

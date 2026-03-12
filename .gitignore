@@ -46,8 +46,8 @@ assets/sfx/
 # ── Test artifacts ────────────────────────────────────────────────────
 .pytest_cache/
 
-# ── AI / TTS model files (Phase 2+) ──────────────────────────────────
-models/
+# ── AI / TTS model files (auto-downloaded, not tracked) ──────────────
+models/kokoro/
 *.onnx
 *.pt
 *.pth

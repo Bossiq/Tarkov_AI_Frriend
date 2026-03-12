@@ -3,313 +3,1042 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PMC Overwatch — Control Panel</title>
+    <title>PMC Overwatch — Command Center</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <style>
         :root {
-            --bg: #0a0e17;
-            --surface: #131a2b;
-            --border: #1e2a42;
+            --bg: #06090f;
+            --bg2: #0a0f1a;
+            --surface: #0f1623;
+            --surface2: #141d2f;
+            --border: #1a2540;
+            --border-hover: #2a3a60;
             --accent: #00d4ff;
-            --accent2: #7c3aed;
+            --accent-dim: rgba(0, 212, 255, 0.12);
+            --accent-glow: rgba(0, 212, 255, 0.25);
+            --purple: #7c3aed;
+            --purple-dim: rgba(124, 58, 237, 0.12);
             --green: #22c55e;
+            --green-dim: rgba(34, 197, 94, 0.12);
             --yellow: #eab308;
+            --yellow-dim: rgba(234, 179, 8, 0.12);
             --red: #ef4444;
+            --red-dim: rgba(239, 68, 68, 0.12);
+            --orange: #f97316;
+            --orange-dim: rgba(249, 115, 22, 0.12);
             --text: #e2e8f0;
+            --text2: #cbd5e1;
             --muted: #64748b;
+            --dim: #475569;
+            --radius: 12px;
+            --radius-sm: 8px;
         }
 
         * { margin: 0; padding: 0; box-sizing: border-box; }
 
         body {
-            font-family: 'Inter', 'SF Pro Display', -apple-system, sans-serif;
+            font-family: 'Inter', -apple-system, sans-serif;
             background: var(--bg);
             color: var(--text);
             min-height: 100vh;
+            overflow-x: hidden;
         }
 
+        /* ── HEADER ─────────────────────────────────────────────── */
         .header {
-            background: linear-gradient(135deg, var(--surface), #0d1424);
+            background: linear-gradient(180deg, var(--surface), var(--bg2));
             border-bottom: 1px solid var(--border);
-            padding: 1rem 2rem;
+            padding: 0.9rem 1.5rem;
             display: flex;
             align-items: center;
             justify-content: space-between;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            backdrop-filter: blur(12px);
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 0.8rem;
+        }
+
+        .header-logo {
+            width: 32px;
+            height: 32px;
+            background: linear-gradient(135deg, var(--accent), var(--purple));
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1rem;
+            font-weight: 800;
+            color: #fff;
+            box-shadow: 0 0 20px var(--accent-glow);
         }
 
         .header h1 {
-            font-size: 1.4rem;
+            font-size: 1.15rem;
             font-weight: 700;
-            background: linear-gradient(90deg, var(--accent), var(--accent2));
-            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+            background: linear-gradient(90deg, var(--accent), var(--purple));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            letter-spacing: -0.02em;
         }
 
-        .header .status-badge {
-            display: flex; align-items: center; gap: 0.5rem;
-            font-size: 0.85rem; color: var(--green);
-        }
-        .header .status-badge .dot {
-            width: 8px; height: 8px; border-radius: 50%;
-            background: var(--green); animation: pulse 2s infinite;
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
         }
 
-        @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+        .version-badge {
+            font-size: 0.72rem;
+            font-family: 'JetBrains Mono', monospace;
+            color: var(--muted);
+            background: var(--surface2);
+            padding: 0.2rem 0.6rem;
+            border-radius: 6px;
+            border: 1px solid var(--border);
+        }
 
-        .grid {
+        .conn-badge {
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+            font-size: 0.8rem;
+            font-weight: 500;
+        }
+
+        .conn-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--red);
+            transition: background 0.3s, box-shadow 0.3s;
+        }
+
+        .conn-dot.online {
+            background: var(--green);
+            box-shadow: 0 0 8px rgba(34, 197, 94, 0.5);
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+
+        /* ── MAIN GRID ──────────────────────────────────────────── */
+        .main {
             display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 1.2rem;
-            padding: 1.5rem 2rem;
-            max-width: 1200px;
+            grid-template-columns: 1fr 1fr 1fr;
+            grid-template-rows: auto auto 1fr;
+            gap: 1rem;
+            padding: 1.2rem 1.5rem;
+            max-width: 1400px;
             margin: 0 auto;
+            min-height: calc(100vh - 60px);
         }
 
+        /* ── CARD ───────────────────────────────────────────────── */
         .card {
             background: var(--surface);
             border: 1px solid var(--border);
-            border-radius: 12px;
-            padding: 1.2rem;
-            transition: border-color 0.3s;
+            border-radius: var(--radius);
+            padding: 1rem 1.1rem;
+            transition: border-color 0.3s, box-shadow 0.3s;
+            position: relative;
+            overflow: hidden;
         }
-        .card:hover { border-color: var(--accent); }
 
-        .card h2 {
-            font-size: 0.8rem;
+        .card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 1px;
+            background: linear-gradient(90deg, transparent, var(--accent-glow), transparent);
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+
+        .card:hover {
+            border-color: var(--border-hover);
+        }
+
+        .card:hover::before {
+            opacity: 1;
+        }
+
+        .card-title {
+            font-size: 0.7rem;
             text-transform: uppercase;
-            letter-spacing: 0.08em;
+            letter-spacing: 0.1em;
             color: var(--muted);
-            margin-bottom: 0.8rem;
+            margin-bottom: 0.75rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
         }
 
-        .stat-row {
-            display: flex; justify-content: space-between;
-            align-items: center; padding: 0.4rem 0;
-            border-bottom: 1px solid rgba(255,255,255,0.04);
+        .card-title .icon {
+            font-size: 0.85rem;
         }
-        .stat-row:last-child { border-bottom: none; }
-        .stat-label { color: var(--muted); font-size: 0.85rem; }
-        .stat-value {
-            font-weight: 600; font-size: 0.95rem;
+
+        /* ── MODE HERO CARD ─────────────────────────────────────── */
+        .mode-hero {
+            grid-column: 1 / -1;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 1.2rem 1.5rem;
+            background: linear-gradient(135deg, var(--surface), var(--surface2));
+        }
+
+        .mode-left {
+            display: flex;
+            align-items: center;
+            gap: 1.5rem;
+        }
+
+        .mode-indicator {
+            width: 56px;
+            height: 56px;
+            border-radius: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5rem;
+            transition: all 0.4s ease;
+            position: relative;
+        }
+
+        .mode-indicator.idle {
+            background: rgba(100, 116, 139, 0.15);
+            border: 2px solid rgba(100, 116, 139, 0.3);
+        }
+
+        .mode-indicator.listening {
+            background: var(--accent-dim);
+            border: 2px solid rgba(0, 212, 255, 0.4);
+            box-shadow: 0 0 30px var(--accent-glow);
+            animation: mode-pulse 1.5s infinite;
+        }
+
+        .mode-indicator.thinking {
+            background: var(--yellow-dim);
+            border: 2px solid rgba(234, 179, 8, 0.4);
+            box-shadow: 0 0 30px rgba(234, 179, 8, 0.15);
+            animation: mode-pulse 1s infinite;
+        }
+
+        .mode-indicator.speaking {
+            background: var(--green-dim);
+            border: 2px solid rgba(34, 197, 94, 0.4);
+            box-shadow: 0 0 30px rgba(34, 197, 94, 0.15);
+        }
+
+        @keyframes mode-pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+        }
+
+        .mode-info h3 {
+            font-size: 1.3rem;
+            font-weight: 700;
+            letter-spacing: -0.01em;
+            text-transform: uppercase;
+        }
+
+        .mode-info .mode-sub {
+            font-size: 0.8rem;
+            color: var(--muted);
+            margin-top: 0.15rem;
+        }
+
+        .mode-right {
+            display: flex;
+            align-items: center;
+            gap: 2rem;
+        }
+
+        .mode-stat {
+            text-align: center;
+        }
+
+        .mode-stat .stat-num {
+            font-size: 1.5rem;
+            font-weight: 700;
             font-variant-numeric: tabular-nums;
+            color: var(--text);
         }
 
-        .mode-idle { color: var(--muted); }
-        .mode-listening { color: var(--accent); }
-        .mode-thinking { color: var(--yellow); }
-        .mode-speaking { color: var(--green); }
-
-        .amplitude-bar {
-            width: 100%; height: 6px; background: rgba(255,255,255,0.06);
-            border-radius: 3px; overflow: hidden;
-        }
-        .amplitude-fill {
-            height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent2));
-            transition: width 0.05s; width: 0%;
-            border-radius: 3px;
-        }
-
-        .log-container {
-            grid-column: 1 / -1;
-            max-height: 300px;
-            overflow-y: auto;
-            font-family: 'JetBrains Mono', 'Menlo', monospace;
-            font-size: 0.78rem;
-            line-height: 1.6;
+        .mode-stat .stat-label {
+            font-size: 0.65rem;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
             color: var(--muted);
-        }
-        .log-container .log-entry { padding: 2px 0; }
-        .log-container .log-user { color: var(--accent); }
-        .log-container .log-ai { color: var(--green); }
-        .log-container .log-system { color: var(--yellow); }
-
-        .btn {
-            background: linear-gradient(135deg, var(--accent), var(--accent2));
-            color: #fff; border: none; padding: 0.5rem 1.2rem;
-            border-radius: 8px; font-size: 0.85rem; font-weight: 600;
-            cursor: pointer; transition: opacity 0.2s, transform 0.1s;
-        }
-        .btn:hover { opacity: 0.9; }
-        .btn:active { transform: scale(0.97); }
-        .btn-danger {
-            background: linear-gradient(135deg, var(--red), #b91c1c);
-        }
-        .btn-row { display: flex; gap: 0.6rem; margin-top: 0.5rem; }
-
-        .subtitle-box {
-            grid-column: 1 / -1;
-            text-align: center; font-size: 1.1rem;
-            padding: 1rem; min-height: 3rem;
-            color: var(--text); font-style: italic;
-            opacity: 0.8;
+            margin-top: 0.1rem;
         }
 
         .emotion-badge {
-            display: inline-block;
-            padding: 0.2rem 0.7rem;
-            background: rgba(0, 212, 255, 0.1);
-            border: 1px solid rgba(0, 212, 255, 0.3);
+            display: inline-flex;
+            align-items: center;
+            gap: 0.3rem;
+            padding: 0.25rem 0.7rem;
+            background: var(--accent-dim);
+            border: 1px solid rgba(0, 212, 255, 0.2);
             border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 500;
+            color: var(--accent);
+        }
+
+        /* ── AMPLITUDE BAR ──────────────────────────────────────── */
+        .amp-container {
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+            min-width: 200px;
+        }
+
+        .amp-bar {
+            flex: 1;
+            height: 8px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .amp-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--accent), var(--purple));
+            transition: width 0.06s;
+            width: 0%;
+            border-radius: 4px;
+            box-shadow: 0 0 8px var(--accent-glow);
+        }
+
+        .amp-value {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.75rem;
+            color: var(--muted);
+            min-width: 36px;
+            text-align: right;
+        }
+
+        /* ── ENGINE CARDS ───────────────────────────────────────── */
+        .engine-card {
+            display: flex;
+            align-items: center;
+            gap: 0.7rem;
+            padding: 0.6rem 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+        }
+
+        .engine-card:last-child {
+            border-bottom: none;
+        }
+
+        .engine-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+
+        .engine-dot.on {
+            background: var(--green);
+            box-shadow: 0 0 6px rgba(34, 197, 94, 0.4);
+        }
+
+        .engine-dot.off {
+            background: var(--dim);
+        }
+
+        .engine-dot.active {
+            background: var(--accent);
+            box-shadow: 0 0 8px var(--accent-glow);
+            animation: pulse 1.5s infinite;
+        }
+
+        .engine-dot.cooldown {
+            background: var(--yellow);
+            box-shadow: 0 0 6px rgba(234, 179, 8, 0.4);
+        }
+
+        .engine-name {
+            font-weight: 600;
+            font-size: 0.9rem;
+            flex: 1;
+        }
+
+        .engine-model {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.72rem;
+            color: var(--muted);
+            background: var(--bg2);
+            padding: 0.15rem 0.5rem;
+            border-radius: 4px;
+        }
+
+        .engine-badge {
+            font-size: 0.65rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            padding: 0.15rem 0.45rem;
+            border-radius: 4px;
+        }
+
+        .badge-primary { background: var(--accent-dim); color: var(--accent); }
+        .badge-ready { background: var(--green-dim); color: var(--green); }
+        .badge-off { background: rgba(100, 116, 139, 0.15); color: var(--dim); }
+        .badge-cooldown { background: var(--yellow-dim); color: var(--yellow); }
+
+        /* ── MASCOT CONTROLS ────────────────────────────────────── */
+        .ctrl-section {
+            margin-bottom: 0.8rem;
+        }
+
+        .ctrl-section:last-child {
+            margin-bottom: 0;
+        }
+
+        .ctrl-label {
+            font-size: 0.65rem;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--dim);
+            margin-bottom: 0.4rem;
+            font-weight: 600;
+        }
+
+        .ctrl-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 0.4rem;
+        }
+
+        .ctrl-grid-4 {
+            grid-template-columns: repeat(4, 1fr);
+        }
+
+        .btn {
+            background: var(--surface2);
+            color: var(--text2);
+            border: 1px solid var(--border);
+            padding: 0.5rem 0.3rem;
+            border-radius: var(--radius-sm);
+            font-size: 0.78rem;
+            font-weight: 500;
+            font-family: 'Inter', sans-serif;
+            cursor: pointer;
+            transition: all 0.15s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.3rem;
+        }
+
+        .btn:hover {
+            background: var(--border);
+            border-color: var(--border-hover);
+            transform: translateY(-1px);
+        }
+
+        .btn:active {
+            transform: scale(0.97);
+        }
+
+        .btn-accent {
+            background: linear-gradient(135deg, rgba(0, 212, 255, 0.15), rgba(124, 58, 237, 0.15));
+            border-color: rgba(0, 212, 255, 0.3);
+            color: var(--accent);
+        }
+
+        .btn-accent:hover {
+            background: linear-gradient(135deg, rgba(0, 212, 255, 0.25), rgba(124, 58, 237, 0.25));
+            box-shadow: 0 0 15px var(--accent-glow);
+        }
+
+        .btn-danger {
+            border-color: rgba(239, 68, 68, 0.3);
+            color: var(--red);
+        }
+
+        .btn-danger:hover {
+            background: var(--red-dim);
+            border-color: rgba(239, 68, 68, 0.5);
+        }
+
+        .btn-full {
+            grid-column: 1 / -1;
+        }
+
+        /* ── SUBTITLE BOX ───────────────────────────────────────── */
+        .subtitle-card {
+            grid-column: 1 / -1;
+            text-align: center;
+            font-size: 1rem;
+            padding: 0.8rem 1.5rem;
+            min-height: 2.5rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text2);
+            font-style: italic;
+            background: linear-gradient(135deg, var(--surface), var(--bg2));
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            transition: color 0.3s;
+        }
+
+        .subtitle-card.active {
+            color: var(--text);
+            font-style: normal;
+            border-color: rgba(0, 212, 255, 0.2);
+            box-shadow: 0 0 20px rgba(0, 212, 255, 0.05);
+        }
+
+        /* ── LOG PANEL ──────────────────────────────────────────── */
+        .log-card {
+            grid-column: 1 / -1;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .log-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .log-scroll {
+            flex: 1;
+            max-height: 320px;
+            overflow-y: auto;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.75rem;
+            line-height: 1.7;
+            margin-top: 0.5rem;
+            scrollbar-width: thin;
+            scrollbar-color: var(--border) transparent;
+        }
+
+        .log-scroll::-webkit-scrollbar {
+            width: 4px;
+        }
+
+        .log-scroll::-webkit-scrollbar-thumb {
+            background: var(--border);
+            border-radius: 4px;
+        }
+
+        .log-entry {
+            padding: 1px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.02);
+        }
+
+        .log-time {
+            color: var(--dim);
+        }
+
+        .log-entry.log-user { color: var(--accent); }
+        .log-entry.log-ai { color: var(--green); }
+        .log-entry.log-system { color: var(--yellow); }
+        .log-entry.log-error { color: var(--red); }
+        .log-entry.log-twitch { color: var(--purple); }
+
+        /* ── SETTINGS PANEL ─────────────────────────────────────── */
+        .setting-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0.5rem 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+        }
+
+        .setting-row:last-child { border-bottom: none; }
+
+        .setting-label {
+            font-size: 0.8rem;
+            color: var(--text2);
+        }
+
+        .setting-value {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.75rem;
+            color: var(--muted);
+            background: var(--bg2);
+            padding: 0.2rem 0.5rem;
+            border-radius: 4px;
+            border: 1px solid var(--border);
+            max-width: 180px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        /* ── SCREEN CAPTURE ─────────────────────────────────────── */
+        .screen-stat {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.35rem 0;
+        }
+
+        .screen-stat .stat-icon {
             font-size: 0.85rem;
         }
+
+        .screen-stat .stat-text {
+            font-size: 0.82rem;
+            color: var(--text2);
+            flex: 1;
+        }
+
+        .screen-stat .stat-val {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.78rem;
+            color: var(--muted);
+        }
+
+        /* ── FOOTER ─────────────────────────────────────────────── */
+        .footer {
+            text-align: center;
+            padding: 0.8rem;
+            font-size: 0.7rem;
+            color: var(--dim);
+            border-top: 1px solid var(--border);
+        }
+
+        /* ── RESPONSIVE ─────────────────────────────────────────── */
+        @media (max-width: 900px) {
+            .main {
+                grid-template-columns: 1fr 1fr;
+            }
+            .mode-hero { flex-wrap: wrap; gap: 1rem; }
+            .mode-right { flex-wrap: wrap; }
+        }
+
+        @media (max-width: 600px) {
+            .main { grid-template-columns: 1fr; }
+        }
+
+        /* ── ANIMATIONS ─────────────────────────────────────────── */
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(8px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .card { animation: fadeIn 0.4s ease both; }
+        .card:nth-child(2) { animation-delay: 0.05s; }
+        .card:nth-child(3) { animation-delay: 0.1s; }
+        .card:nth-child(4) { animation-delay: 0.15s; }
+        .card:nth-child(5) { animation-delay: 0.2s; }
+        .card:nth-child(6) { animation-delay: 0.25s; }
     </style>
 </head>
 <body>
+    <!-- HEADER -->
     <div class="header">
-        <h1>⚡ PMC Overwatch</h1>
-        <div class="status-badge">
-            <span class="dot" id="statusDot"></span>
-            <span id="statusText">Connecting...</span>
+        <div class="header-left">
+            <div class="header-logo">⚡</div>
+            <h1>PMC Overwatch</h1>
+        </div>
+        <div class="header-right">
+            <span class="version-badge" id="versionBadge">v—</span>
+            <div class="conn-badge">
+                <span class="conn-dot" id="connDot"></span>
+                <span id="connText" style="color: var(--muted);">Connecting…</span>
+            </div>
         </div>
     </div>
 
-    <div class="grid">
-        <!-- Status Card -->
+    <div class="main">
+        <!-- MODE HERO -->
+        <div class="card mode-hero">
+            <div class="mode-left">
+                <div class="mode-indicator idle" id="modeIndicator">💤</div>
+                <div class="mode-info">
+                    <h3 id="modeText" style="color: var(--muted);">IDLE</h3>
+                    <div class="mode-sub" id="modeSub">Waiting for voice input…</div>
+                </div>
+            </div>
+            <div class="mode-right">
+                <div>
+                    <span id="emotionBadge" class="emotion-badge">😐 neutral</span>
+                </div>
+                <div class="amp-container">
+                    <div class="amp-bar"><div class="amp-fill" id="ampFill"></div></div>
+                    <span class="amp-value" id="ampValue">0%</span>
+                </div>
+                <div class="mode-stat">
+                    <div class="stat-num" id="uptimeNum">0:00</div>
+                    <div class="stat-label">Uptime</div>
+                </div>
+                <div class="mode-stat">
+                    <div class="stat-num" id="clientsNum">0</div>
+                    <div class="stat-label">Clients</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ENGINE STATUS -->
         <div class="card">
-            <h2>System Status</h2>
-            <div class="stat-row">
-                <span class="stat-label">Mode</span>
-                <span class="stat-value" id="modeValue">—</span>
-            </div>
-            <div class="stat-row">
-                <span class="stat-label">Emotion</span>
-                <span id="emotionValue" class="emotion-badge">neutral</span>
-            </div>
-            <div class="stat-row">
-                <span class="stat-label">Amplitude</span>
-                <div class="amplitude-bar"><div class="amplitude-fill" id="ampBar"></div></div>
-            </div>
-            <div class="stat-row">
-                <span class="stat-label">Uptime</span>
-                <span class="stat-value" id="uptimeValue">—</span>
-            </div>
-            <div class="stat-row">
-                <span class="stat-label">Clients</span>
-                <span class="stat-value" id="clientsValue">0</span>
+            <div class="card-title"><span class="icon">🧠</span> LLM Engines</div>
+            <div id="engineList">
+                <div class="engine-card">
+                    <div class="engine-dot off" id="groqDot"></div>
+                    <span class="engine-name">Groq</span>
+                    <span class="engine-model" id="groqModel">—</span>
+                    <span class="engine-badge badge-off" id="groqBadge">OFF</span>
+                </div>
+                <div class="engine-card">
+                    <div class="engine-dot off" id="geminiDot"></div>
+                    <span class="engine-name">Gemini</span>
+                    <span class="engine-model" id="geminiModel">—</span>
+                    <span class="engine-badge badge-off" id="geminiBadge">OFF</span>
+                </div>
+                <div class="engine-card">
+                    <div class="engine-dot off" id="ollamaDot"></div>
+                    <span class="engine-name">Ollama</span>
+                    <span class="engine-model" id="ollamaModel">—</span>
+                    <span class="engine-badge badge-off" id="ollamaBadge">OFF</span>
+                </div>
             </div>
         </div>
 
-        <!-- Controls Card -->
+        <!-- MASCOT CONTROLS -->
         <div class="card">
-            <h2>Controls</h2>
-            <div class="btn-row">
-                <button class="btn" onclick="clearMemory()">🧹 Clear Memory</button>
-                <button class="btn" onclick="triggerAnim('dance')">💃 Dance</button>
-                <button class="btn" onclick="triggerAnim('wave')">👋 Wave</button>
+            <div class="card-title"><span class="icon">🎮</span> Mascot Controls</div>
+
+            <div class="ctrl-section">
+                <div class="ctrl-label">Animations</div>
+                <div class="ctrl-grid">
+                    <button class="btn" onclick="triggerAnim('dance')">💃 Dance</button>
+                    <button class="btn" onclick="triggerAnim('wave')">👋 Wave</button>
+                    <button class="btn" onclick="triggerAnim('clap')">👏 Clap</button>
+                    <button class="btn" onclick="triggerAnim('think')">🤔 Think</button>
+                    <button class="btn" onclick="triggerAnim('shrug')">🤷 Shrug</button>
+                    <button class="btn" onclick="triggerAnim('celebrate')">🎉 Win</button>
+                    <button class="btn" onclick="triggerAnim('salute')">🫡 Salute</button>
+                    <button class="btn" onclick="triggerAnim('crouch')">🧎 Crouch</button>
+                    <button class="btn btn-danger" onclick="triggerAnim('die')">💀 Die</button>
+                </div>
             </div>
-            <div class="btn-row" style="margin-top: 0.6rem;">
-                <button class="btn" onclick="navigate('left')">⬅ Left</button>
-                <button class="btn" onclick="navigate('center')">⏺ Center</button>
-                <button class="btn" onclick="navigate('right')">➡ Right</button>
-            </div>
-            <div class="btn-row" style="margin-top: 0.6rem;">
-                <button class="btn" onclick="triggerAnim('celebrate')">🎉 Celebrate</button>
-                <button class="btn" onclick="triggerAnim('salute')">🫡 Salute</button>
-                <button class="btn btn-danger" onclick="triggerAnim('die')">💀 Die</button>
+
+            <div class="ctrl-section">
+                <div class="ctrl-label">Movement</div>
+                <div class="ctrl-grid ctrl-grid-4">
+                    <button class="btn" onclick="navigate('left')">⬅ Left</button>
+                    <button class="btn btn-accent" onclick="navigate('center')">⏺ Center</button>
+                    <button class="btn" onclick="navigate('right')">➡ Right</button>
+                    <button class="btn" onclick="navigate('random')">🎲 Random</button>
+                </div>
             </div>
         </div>
 
-        <!-- Subtitle -->
-        <div class="card subtitle-box" id="subtitleBox">
-            Waiting for speech...
+        <!-- SYSTEM INFO -->
+        <div class="card">
+            <div class="card-title"><span class="icon">📡</span> System Info</div>
+            <div class="screen-stat">
+                <span class="stat-icon">🖥️</span>
+                <span class="stat-text">Screen Capture</span>
+                <span class="stat-val" id="screenStatus">—</span>
+            </div>
+            <div class="screen-stat">
+                <span class="stat-icon">📸</span>
+                <span class="stat-text">Frames Captured</span>
+                <span class="stat-val" id="screenFrames">0</span>
+            </div>
+            <div class="screen-stat">
+                <span class="stat-icon">🎙️</span>
+                <span class="stat-text">Input Mode</span>
+                <span class="stat-val" id="inputMode">—</span>
+            </div>
+            <div class="screen-stat">
+                <span class="stat-icon">💬</span>
+                <span class="stat-text">Twitch</span>
+                <span class="stat-val" id="twitchStatus">—</span>
+            </div>
+
+            <div style="margin-top: 0.8rem; display: flex; gap: 0.4rem;">
+                <button class="btn btn-accent btn-full" onclick="clearMemory()">🧹 Clear AI Memory</button>
+            </div>
         </div>
 
-        <!-- Conversation Log -->
-        <div class="card" style="grid-column: 1 / -1;">
-            <h2>Conversation Log</h2>
-            <div class="log-container" id="logContainer"></div>
+        <!-- SUBTITLE -->
+        <div class="subtitle-card" id="subtitleBox">
+            Waiting for speech…
         </div>
+
+        <!-- CONVERSATION LOG -->
+        <div class="card log-card">
+            <div class="log-header">
+                <div class="card-title" style="margin-bottom: 0;"><span class="icon">📋</span> Live Log</div>
+                <button class="btn" onclick="clearLog()" style="padding: 0.25rem 0.6rem; font-size: 0.7rem;">Clear</button>
+            </div>
+            <div class="log-scroll" id="logScroll"></div>
+        </div>
+    </div>
+
+    <div class="footer">
+        PMC Overwatch — AI Companion for Escape from Tarkov · <span id="footerUptime">0s</span>
     </div>
 
     <script>
         const WS_URL = `ws://${location.host}/ws/mascot`;
-        const API = `http://${location.host}`;
+        const API_BASE = `http://${location.host}`;
         let ws = null;
         let reconnectTimer = null;
+        let statusPollTimer = null;
 
+        /* ── EMOJI MAP for emotions ───────────────────────────── */
+        const EMOTION_EMOJI = {
+            neutral: '😐', happy: '😊', excited: '🔥', amused: '😄',
+            concerned: '😟', sarcastic: '😏', surprised: '😲',
+            confident: '😎', empathetic: '🤗', thinking: '🤔',
+            focused: '🎯', annoyed: '😤',
+        };
+
+        const MODE_ICONS = {
+            idle: '💤', listening: '🎙️', thinking: '🧠', speaking: '🔊',
+        };
+
+        const MODE_COLORS = {
+            idle: 'var(--muted)', listening: 'var(--accent)',
+            thinking: 'var(--yellow)', speaking: 'var(--green)',
+        };
+
+        const MODE_SUBS = {
+            idle: 'Waiting for voice input…',
+            listening: 'Listening for speech…',
+            thinking: 'Generating response…',
+            speaking: 'Speaking response…',
+        };
+
+        /* ── WEBSOCKET ────────────────────────────────────────── */
         function connect() {
+            if (ws && ws.readyState <= 1) return;
             ws = new WebSocket(WS_URL);
+
             ws.onopen = () => {
-                document.getElementById('statusText').textContent = 'Connected';
-                document.getElementById('statusDot').style.background = 'var(--green)';
+                document.getElementById('connDot').classList.add('online');
+                document.getElementById('connText').textContent = 'Connected';
+                document.getElementById('connText').style.color = 'var(--green)';
                 addLog('system', 'Connected to PMC Overwatch');
                 fetchStatus();
             };
+
             ws.onclose = () => {
-                document.getElementById('statusText').textContent = 'Disconnected';
-                document.getElementById('statusDot').style.background = 'var(--red)';
+                document.getElementById('connDot').classList.remove('online');
+                document.getElementById('connText').textContent = 'Disconnected';
+                document.getElementById('connText').style.color = 'var(--red)';
                 reconnectTimer = setTimeout(connect, 3000);
             };
+
+            ws.onerror = () => {};
+
             ws.onmessage = (e) => {
-                const msg = JSON.parse(e.data);
-                handleMessage(msg);
+                try {
+                    const msg = JSON.parse(e.data);
+                    handleMessage(msg);
+                } catch {}
             };
         }
 
         function handleMessage(msg) {
             switch (msg.type) {
                 case 'mode':
-                    const el = document.getElementById('modeValue');
-                    el.textContent = msg.value.toUpperCase();
-                    el.className = `stat-value mode-${msg.value}`;
+                    updateMode(msg.value);
                     break;
                 case 'amplitude':
-                    document.getElementById('ampBar').style.width = `${msg.value * 100}%`;
+                    const pct = Math.round(msg.value * 100);
+                    document.getElementById('ampFill').style.width = `${pct}%`;
+                    document.getElementById('ampValue').textContent = `${pct}%`;
                     break;
                 case 'emotion':
-                    document.getElementById('emotionValue').textContent = msg.value;
+                    const emoji = EMOTION_EMOJI[msg.value] || '😐';
+                    document.getElementById('emotionBadge').textContent = `${emoji} ${msg.value}`;
                     break;
                 case 'subtitle':
-                    document.getElementById('subtitleBox').textContent = msg.value || 'Waiting for speech...';
-                    if (msg.value) addLog('ai', msg.value);
+                    const sub = document.getElementById('subtitleBox');
+                    if (msg.value) {
+                        sub.textContent = msg.value;
+                        sub.classList.add('active');
+                        addLog('ai', msg.value);
+                    } else {
+                        sub.textContent = 'Waiting for speech…';
+                        sub.classList.remove('active');
+                    }
                     break;
                 case 'chat':
-                    addLog('user', `[${msg.value.user}] ${msg.value.message}`);
+                    addLog('twitch', `[${msg.value.user}] ${msg.value.message}`);
                     break;
             }
         }
 
-        function addLog(type, text) {
-            const container = document.getElementById('logContainer');
-            const entry = document.createElement('div');
-            entry.className = `log-entry log-${type}`;
-            const time = new Date().toLocaleTimeString();
-            entry.textContent = `[${time}] ${text}`;
-            container.appendChild(entry);
-            container.scrollTop = container.scrollHeight;
-            // Keep last 100 entries
-            while (container.children.length > 100) container.removeChild(container.firstChild);
+        function updateMode(mode) {
+            const indicator = document.getElementById('modeIndicator');
+            const text = document.getElementById('modeText');
+            const sub = document.getElementById('modeSub');
+
+            indicator.className = `mode-indicator ${mode}`;
+            indicator.textContent = MODE_ICONS[mode] || '💤';
+            text.textContent = mode.toUpperCase();
+            text.style.color = MODE_COLORS[mode] || 'var(--muted)';
+            sub.textContent = MODE_SUBS[mode] || '';
         }
 
+        /* ── STATUS POLLING ───────────────────────────────────── */
         async function fetchStatus() {
             try {
-                const res = await fetch(`${API}/api/status`);
-                const data = await res.json();
-                document.getElementById('uptimeValue').textContent = data.uptime_human || '—';
-                document.getElementById('clientsValue').textContent = data.mascot_clients || 0;
+                const res = await fetch(`${API_BASE}/api/status`);
+                const d = await res.json();
+
+                // Uptime
+                document.getElementById('uptimeNum').textContent = d.uptime_human || '0s';
+                document.getElementById('footerUptime').textContent = d.uptime_human || '0s';
+
+                // Clients
+                document.getElementById('clientsNum').textContent = d.mascot_clients ?? 0;
+
+                // Engine info
+                const engine = d.engine || 'none';
+                const model = d.model || '—';
+                updateEngines(engine, model, d);
+
+                // Screen capture
+                document.getElementById('screenStatus').textContent = d.screen_capture ? '✅ Active' : '❌ Off';
+                document.getElementById('screenFrames').textContent = d.screen_frames ?? 0;
+
+                // Version
+                if (d.version) {
+                    document.getElementById('versionBadge').textContent = `v${d.version}`;
+                }
+
             } catch (e) {}
-            setTimeout(fetchStatus, 5000);
+            statusPollTimer = setTimeout(fetchStatus, 3000);
         }
 
+        function updateEngines(activeEngine, activeModel, data) {
+            // Config-based detection from /api/config
+            const engines = ['groq', 'gemini', 'ollama'];
+
+            engines.forEach(eng => {
+                const dot = document.getElementById(`${eng}Dot`);
+                const badge = document.getElementById(`${eng}Badge`);
+                const modelEl = document.getElementById(`${eng}Model`);
+
+                if (eng === activeEngine) {
+                    dot.className = 'engine-dot active';
+                    badge.className = 'engine-badge badge-primary';
+                    badge.textContent = 'ACTIVE';
+                    modelEl.textContent = activeModel;
+                } else {
+                    // We'll check config for keys
+                    dot.className = 'engine-dot on';
+                    badge.className = 'engine-badge badge-ready';
+                    badge.textContent = 'READY';
+                    modelEl.textContent = '—';
+                }
+            });
+        }
+
+        /* ── FETCH CONFIG for engine status ────────────────────── */
+        async function fetchConfig() {
+            try {
+                const res = await fetch(`${API_BASE}/api/config`);
+                const cfg = await res.json();
+
+                // Show which engines have keys configured
+                const hasGroq = cfg.GROQ_API_KEY && !cfg.GROQ_API_KEY.includes('***') ? false : !!cfg.GROQ_API_KEY;
+                const hasGemini = cfg.GEMINI_API_KEY && !cfg.GEMINI_API_KEY.includes('***') ? false : !!cfg.GEMINI_API_KEY;
+
+                if (!hasGroq) {
+                    document.getElementById('groqDot').className = 'engine-dot off';
+                    document.getElementById('groqBadge').className = 'engine-badge badge-off';
+                    document.getElementById('groqBadge').textContent = 'NO KEY';
+                }
+
+                if (!hasGemini) {
+                    document.getElementById('geminiDot').className = 'engine-dot off';
+                    document.getElementById('geminiBadge').className = 'engine-badge badge-off';
+                    document.getElementById('geminiBadge').textContent = 'NO KEY';
+                }
+
+                // Show models from config
+                if (cfg.GROQ_MODEL) document.getElementById('groqModel').textContent = cfg.GROQ_MODEL;
+                if (cfg.GEMINI_MODEL) document.getElementById('geminiModel').textContent = cfg.GEMINI_MODEL;
+                if (cfg.OLLAMA_MODEL) document.getElementById('ollamaModel').textContent = cfg.OLLAMA_MODEL;
+
+                // Input mode
+                document.getElementById('inputMode').textContent = (cfg.INPUT_MODE || 'auto').toUpperCase();
+
+                // Twitch
+                document.getElementById('twitchStatus').textContent = cfg.TWITCH_TOKEN ? '✅ Configured' : '❌ Disabled';
+
+            } catch (e) {}
+        }
+
+        /* ── LOG ───────────────────────────────────────────────── */
+        function addLog(type, text) {
+            const scroll = document.getElementById('logScroll');
+            const entry = document.createElement('div');
+            entry.className = `log-entry log-${type}`;
+            const time = new Date().toLocaleTimeString('en-GB', { hour12: false });
+            entry.innerHTML = `<span class="log-time">[${time}]</span> ${escapeHTML(text)}`;
+            scroll.appendChild(entry);
+            scroll.scrollTop = scroll.scrollHeight;
+            while (scroll.children.length > 200) scroll.removeChild(scroll.firstChild);
+        }
+
+        function escapeHTML(str) {
+            const d = document.createElement('div');
+            d.textContent = str;
+            return d.innerHTML;
+        }
+
+        function clearLog() {
+            document.getElementById('logScroll').innerHTML = '';
+            addLog('system', 'Log cleared');
+        }
+
+        /* ── ACTIONS ──────────────────────────────────────────── */
         async function clearMemory() {
             try {
-                await fetch(`${API}/api/clear-memory`, { method: 'POST' });
-                addLog('system', 'Memory cleared');
-            } catch (e) { addLog('system', 'Failed to clear memory'); }
+                const res = await fetch(`${API_BASE}/api/clear-memory`, { method: 'POST' });
+                const d = await res.json();
+                addLog('system', `Memory cleared: ${d.message || 'OK'}`);
+            } catch (e) {
+                addLog('error', 'Failed to clear memory');
+            }
         }
 
         function triggerAnim(name) {
             if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ type: 'animation', value: name }));
-                addLog('system', `Triggered: ${name}`);
+                ws.send(JSON.stringify({ type: 'trigger_animation', value: name }));
+                addLog('system', `🎬 Animation: ${name}`);
             }
+
+            // Also broadcast via server (in case the WS send above isn't handled)
+            fetch(`${API_BASE}/api/status`).catch(() => {});
         }
 
         function navigate(dir) {
             if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ type: 'navigate', value: dir }));
+                ws.send(JSON.stringify({ type: 'trigger_navigate', value: dir }));
+                addLog('system', `📍 Move: ${dir}`);
             }
         }
 
+        /* ── INIT ─────────────────────────────────────────────── */
         connect();
+        fetchConfig();
     </script>
 </body>
 </html>

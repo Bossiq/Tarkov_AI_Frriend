@@ -2,6 +2,29 @@
 
 All notable changes to PMC Overwatch are documented here.
 
+## [0.27.0] — 2026-03-12
+
+### Added
+- **Premium dashboard UI** — complete redesign with dark tactical theme at `localhost:8420`
+  - Real-time LLM engine status cards (Groq/Gemini/Ollama) with active/ready/off badges
+  - Mode hero indicator with live emoji, amplitude bar, uptime, and client count
+  - 9 animation buttons + 4 movement buttons for mascot control
+  - System info panel (screen capture, input mode, Twitch status)
+  - Scrollable live conversation log with color-coded entries
+- **Persistent conversation memory** — AI remembers context across app restarts (`logs/memory.json`)
+- **Crash protection** — `sys.excepthook` + `threading.excepthook` catch ALL unhandled exceptions
+  - Full traceback written to `logs/crash.log` with timestamp
+  - Console pauses on crash with "Press Enter to exit"
+  - Daemon thread crashes are now logged instead of dying silently
+
+### Changed
+- Dashboard WebSocket now forwards animation/navigate triggers to mascot overlay
+- `/api/status` exposes `version`, `input_mode`, and more engine data
+- Version bumped to `0.27.0`
+
+### Fixed
+- Dashboard "Clear AI Memory" button now works (wired to `Brain.clear_memory()`)
+
 ## [0.26.0] — 2026-03-12
 
 ### Added

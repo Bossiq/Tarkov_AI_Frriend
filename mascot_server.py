@@ -319,11 +319,17 @@ class MascotServer:
 
             try:
                 while True:
-                    # Listen for commands FROM the mascot (chat triggers)
+                    # Listen for commands FROM the dashboard/mascot
                     data = await websocket.receive_text()
                     try:
                         msg = json.loads(data)
-                        logger.debug("Mascot sent: %s", msg)
+                        logger.debug("WS client sent: %s", msg)
+                        # Dashboard forwards animation/navigate triggers
+                        msg_type = msg.get("type", "")
+                        if msg_type == "trigger_animation":
+                            self.send_animation(msg.get("value", ""))
+                        elif msg_type == "trigger_navigate":
+                            self.send_navigate(msg.get("value", ""))
                     except json.JSONDecodeError:
                         pass
             except WebSocketDisconnect:
@@ -365,6 +371,7 @@ class MascotServer:
                 "uptime_human": _format_uptime(uptime),
                 "mascot_clients": len(self._clients),
                 "current_state": self._state,
+                "version": "0.27.0",
             }
             if self._get_status:
                 try:

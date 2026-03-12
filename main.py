@@ -101,7 +101,7 @@ from voice_output import VoiceOutput  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
-__version__ = "0.26.0"
+__version__ = "0.27.0"
 
 
 class PMCOverwatch:
@@ -739,6 +739,8 @@ class PMCOverwatch:
             "model": self._brain._model if self._brain else "none",
             "screen_capture": self._screen_enabled,
             "screen_frames": self._screen.frame_count if self._screen else 0,
+            "input_mode": self._input_mode,
+            "version": __version__,
         }
 
 

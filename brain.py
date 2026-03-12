@@ -16,6 +16,7 @@ Features:
   * Screen vision analysis via Gemini Vision API
 """
 
+import json
 import logging
 import os
 import re
@@ -181,6 +182,12 @@ class Brain:
         # Conversation memory -- sliding window
         self._memory: deque[dict] = deque(maxlen=_MAX_MEMORY * 2)
         self._rate_limit_until: float = 0.0
+
+        # Persistent memory file
+        self._memory_file = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "logs", "memory.json"
+        )
+        self._load_memory()
 
         # -- Engine clients (all best-effort) --
         self._engines: dict[str, bool] = {}  # engine_name -> available
@@ -428,8 +435,45 @@ class Brain:
         return messages
 
     def _remember(self, role: str, content: str) -> None:
-        """Add a message to conversation memory."""
+        """Add a message to conversation memory and persist to disk."""
         self._memory.append({"role": role, "content": content})
+        self._save_memory()
+
+    def _load_memory(self) -> None:
+        """Load conversation memory from disk (if available)."""
+        try:
+            if os.path.exists(self._memory_file):
+                with open(self._memory_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, list):
+                    self._memory.clear()
+                    for msg in data[-(_MAX_MEMORY * 2):]:
+                        if isinstance(msg, dict) and "role" in msg and "content" in msg:
+                            self._memory.append(msg)
+                    if self._memory:
+                        logger.info("Loaded %d messages from persistent memory", len(self._memory))
+        except Exception:
+            logger.debug("Could not load persistent memory (starting fresh)", exc_info=True)
+
+    def _save_memory(self) -> None:
+        """Save conversation memory to disk."""
+        try:
+            os.makedirs(os.path.dirname(self._memory_file), exist_ok=True)
+            with open(self._memory_file, "w", encoding="utf-8") as f:
+                json.dump(list(self._memory), f, ensure_ascii=False, indent=2)
+        except Exception:
+            logger.debug("Could not save persistent memory", exc_info=True)
+
+    def clear_memory(self) -> None:
+        """Clear conversation memory (both in-memory and on disk)."""
+        self._memory.clear()
+        try:
+            if os.path.exists(self._memory_file):
+                os.remove(self._memory_file)
+                logger.info("Persistent memory file deleted")
+        except Exception:
+            logger.debug("Could not delete memory file", exc_info=True)
+        logger.info("Conversation memory cleared")
 
     # ── Public API ────────────────────────────────────────────────────
     def generate_response(

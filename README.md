@@ -6,7 +6,8 @@
 
 <p align="center">
   <strong>Real-time AI voice companion for Escape from Tarkov streaming</strong><br/>
-  3D Animated Mascot • Triple-Engine LLM • Neural Voice • Twitch Integration
+  3D Animated Mascot • Triple-Engine LLM • Neural Voice • Twitch Integration<br/>
+  <sub>v0.26.0</sub>
 </p>
 
 <p align="center">
@@ -103,7 +104,8 @@ Rate limits are tracked with cooldown timers. When one engine hits its limit, th
 ### Stream Integration
 | Feature | Description |
 |---------|-------------|
-| **Twitch Chat Bot** | Responds to chat, accepts movement commands |
+| **Twitch Chat Bot** | Responds to chat, accepts viewer commands |
+| **Twitch Commands** | `!move` `!dance` `!wave` `!clap` `!think` `!shrug` `!status` — with 10s per-user cooldown |
 | **Screen Commentary** | Gemini Vision analyzes gameplay and provides auto-commentary |
 | **Dashboard UI** | Web control panel at `localhost:8420` with real-time status |
 | **Tarkov Knowledge** | Quest database, ammo tables, map extracts, boss info, flea market |
@@ -200,11 +202,16 @@ Tarkov_AI_Frriend/
 │   ├── mascot_3d.html       # 3D mascot overlay (Three.js + FBX animations)
 │   ├── mascot.html          # 2D sprite fallback overlay
 │   ├── dashboard_ui.html    # Web control panel
-│   └── animations/          # Mixamo FBX animation files
-└── models/
-    ├── altyn_boss.fbx       # 3D character model (23MB)
-    ├── rpk_gold.glb         # Gold RPK weapon model (8MB)
-    └── kokoro/              # Kokoro TTS model (offline, 325MB)
+│   ├── sprites/             # 2D emotion sprites (8 PNGs)
+│   └── animations/          # Mixamo FBX animation files (10 FBX)
+├── models/
+│   ├── altyn_boss.fbx       # 3D character model (23MB)
+│   ├── rpk_gold.glb         # Gold RPK weapon model (8MB)
+│   ├── kokoro-v1.0.onnx     # Kokoro TTS model (offline, 325MB)
+│   └── voices-v1.0.bin      # Kokoro voice embeddings (27MB)
+└── tests/
+    ├── test_stress.py       # Stress + integration tests
+    └── test_units.py        # Unit tests for pure-function logic
 ```
 
 ---

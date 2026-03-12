@@ -17,12 +17,15 @@ import asyncio
 import atexit
 import logging
 import os
+import platform
 import re
 import shutil
 import signal
 import subprocess
+import sys
 import threading
 import time
+import traceback
 from typing import Optional
 
 from dotenv import load_dotenv
@@ -34,6 +37,61 @@ from logging_config import setup_logging  # noqa: E402
 
 setup_logging()
 
+# ── Crash protection — write ALL unhandled exceptions to disk ─────────
+_CRASH_LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "crash.log")
+os.makedirs(os.path.dirname(_CRASH_LOG), exist_ok=True)
+
+
+def _crash_handler(exc_type, exc_value, exc_tb):
+    """Last-resort handler: dump unhandled exceptions to crash.log + stderr."""
+    msg = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    entry = f"\n{'='*60}\nCRASH at {timestamp}\n{'='*60}\n{msg}\n"
+    try:
+        with open(_CRASH_LOG, "a", encoding="utf-8") as f:
+            f.write(entry)
+    except Exception:
+        pass
+    # Always print to stderr (visible in terminal even if stdout is gone)
+    try:
+        print(entry, file=sys.stderr, flush=True)
+    except Exception:
+        pass
+
+
+def _thread_crash_handler(args):
+    """Catch exceptions in daemon threads that would otherwise die silently."""
+    if args.exc_type is SystemExit:
+        return
+    msg = "".join(traceback.format_exception(args.exc_type, args.exc_value, args.exc_traceback))
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    thread_name = args.thread.name if args.thread else "unknown"
+    entry = (
+        f"\n{'='*60}\n"
+        f"THREAD CRASH at {timestamp} [{thread_name}]\n"
+        f"{'='*60}\n{msg}\n"
+    )
+    try:
+        with open(_CRASH_LOG, "a", encoding="utf-8") as f:
+            f.write(entry)
+    except Exception:
+        pass
+    try:
+        print(entry, file=sys.stderr, flush=True)
+    except Exception:
+        pass
+    # Also log via standard logging if available
+    try:
+        logging.getLogger(__name__).error(
+            "Thread '%s' crashed: %s", thread_name, args.exc_value,
+        )
+    except Exception:
+        pass
+
+
+sys.excepthook = _crash_handler
+threading.excepthook = _thread_crash_handler
+
 from brain import Brain  # noqa: E402
 from expression_engine import detect_expression, Emotion  # noqa: E402
 from mascot_server import MascotServer  # noqa: E402
@@ -42,6 +100,8 @@ from voice_input import VoiceInput  # noqa: E402
 from voice_output import VoiceOutput  # noqa: E402
 
 logger = logging.getLogger(__name__)
+
+__version__ = "0.26.0"
 
 
 class PMCOverwatch:
@@ -151,15 +211,24 @@ class PMCOverwatch:
 
         # Check if already running (another instance or user-started)
         try:
-            result = subprocess.run(
-                ["pgrep", "-x", "ollama"],
-                capture_output=True, timeout=3,
-            )
-            if result.returncode == 0:
-                self.log("[Ollama] Already running — reusing existing instance")
-                return
+            if platform.system() == "Windows":
+                result = subprocess.run(
+                    ["tasklist", "/FI", "IMAGENAME eq ollama.exe", "/NH"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                if result.returncode == 0 and "ollama.exe" in result.stdout.lower():
+                    self.log("[Ollama] Already running — reusing existing instance")
+                    return
+            else:
+                result = subprocess.run(
+                    ["pgrep", "-x", "ollama"],
+                    capture_output=True, timeout=3,
+                )
+                if result.returncode == 0:
+                    self.log("[Ollama] Already running — reusing existing instance")
+                    return
         except Exception:
-            pass  # pgrep might not exist on all systems
+            pass  # Detection failed — try to start anyway
 
         # Start Ollama as a background subprocess
         self.log("[Ollama] Starting server...")
@@ -200,10 +269,56 @@ class PMCOverwatch:
             self._ollama_we_started = False
 
     # ── Initialization ────────────────────────────────────────────────
+    def _health_check(self) -> None:
+        """Validate LLM engines at startup and print status banner."""
+        self.log("")
+        self.log(f"╔══════════════════════════════════════════════╗")
+        self.log(f"║  PMC Overwatch v{__version__:<29s}║")
+        self.log(f"╚══════════════════════════════════════════════╝")
+        self.log("")
+
+        # Check Groq
+        groq_key = os.getenv("GROQ_API_KEY", "")
+        if groq_key:
+            try:
+                from groq import Groq
+                client = Groq(api_key=groq_key)
+                client.chat.completions.create(
+                    model=os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
+                    messages=[{"role": "user", "content": "hi"}],
+                    max_tokens=1,
+                )
+                self.log("[Health] Groq     ✅ ready")
+            except Exception as e:
+                self.log(f"[Health] Groq     ❌ {str(e)[:60]}")
+        else:
+            self.log("[Health] Groq     ⬚  no API key")
+
+        # Check Gemini
+        gemini_key = os.getenv("GEMINI_API_KEY", "")
+        if gemini_key:
+            self.log("[Health] Gemini   ✅ key configured")
+        else:
+            self.log("[Health] Gemini   ⬚  no API key")
+
+        # Check Ollama
+        try:
+            import urllib.request
+            req = urllib.request.Request("http://localhost:11434/api/version", method="GET")
+            with urllib.request.urlopen(req, timeout=3) as resp:
+                self.log("[Health] Ollama   ✅ running")
+        except Exception:
+            self.log("[Health] Ollama   ⬚  not running")
+
+        self.log("")
+
     def start(self) -> None:
         """Start all subsystems."""
         # Auto-start Ollama if needed
         self._start_ollama()
+
+        # Health check — validate engines before starting
+        self._health_check()
 
         # Start mascot server
         if self._mascot.available:
@@ -289,6 +404,7 @@ class PMCOverwatch:
             self._twitch_bot = TwitchBot()
             self._twitch_bot.set_callback(self._on_twitch_message)
             self._twitch_bot.set_system_reference(self)
+            self._twitch_bot.set_mascot_reference(self._mascot)
 
             thread = threading.Thread(
                 target=self._run_twitch, name="TwitchThread", daemon=True
@@ -631,7 +747,13 @@ def main() -> None:
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
-    system = PMCOverwatch()
+    try:
+        system = PMCOverwatch()
+    except Exception:
+        logger.critical("FATAL: PMCOverwatch failed to initialize", exc_info=True)
+        _crash_handler(*sys.exc_info())
+        input("\n[CRASH] Press Enter to exit...")
+        sys.exit(1)
 
     # Register atexit to ensure Ollama cleanup even on crashes
     atexit.register(system._stop_ollama)
@@ -648,7 +770,13 @@ def main() -> None:
         pass
 
     # Start
-    system.start()
+    try:
+        system.start()
+    except Exception:
+        logger.critical("FATAL: system.start() failed", exc_info=True)
+        _crash_handler(*sys.exc_info())
+        input("\n[CRASH] Press Enter to exit...")
+        sys.exit(1)
 
     # Keep main thread alive
     try:
@@ -656,9 +784,17 @@ def main() -> None:
             system._shutdown.wait(timeout=1.0)
     except KeyboardInterrupt:
         pass
+    except Exception:
+        logger.critical("FATAL: main loop crashed", exc_info=True)
+        _crash_handler(*sys.exc_info())
     finally:
         system.stop()
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        _crash_handler(*sys.exc_info())
+        input("\n[CRASH] Press Enter to exit...")
+        sys.exit(1)

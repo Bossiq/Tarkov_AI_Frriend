@@ -426,11 +426,25 @@ class VoiceOutput:
         """Load Kokoro ONNX model in background thread."""
         import os
         _base = os.path.dirname(os.path.abspath(__file__))
-        model_path = os.path.join(_base, "models", "kokoro", "onnx", "model.onnx")
-        voices_path = os.path.join(_base, "models", "kokoro", "voices.npz")
 
-        if not os.path.exists(model_path) or not os.path.exists(voices_path):
-            logger.info("Kokoro model not found at %s — skipping local TTS", model_path)
+        # Try multiple path conventions (v1.0 flat files, or nested kokoro/ dir)
+        _candidates = [
+            # Flat layout (current download format)
+            (os.path.join(_base, "models", "kokoro-v1.0.onnx"),
+             os.path.join(_base, "models", "voices-v1.0.bin")),
+            # Nested layout (legacy)
+            (os.path.join(_base, "models", "kokoro", "onnx", "model.onnx"),
+             os.path.join(_base, "models", "kokoro", "voices.npz")),
+        ]
+
+        model_path = voices_path = None
+        for mp, vp in _candidates:
+            if os.path.exists(mp) and os.path.exists(vp):
+                model_path, voices_path = mp, vp
+                break
+
+        if not model_path:
+            logger.info("Kokoro model not found — skipping local TTS (searched %d locations)", len(_candidates))
             return
 
         try:

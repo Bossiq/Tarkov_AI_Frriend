@@ -2,6 +2,23 @@
 
 All notable changes to PMC Overwatch are documented here.
 
+## [0.26.0] — 2026-03-12
+
+### Added
+- **Startup health check** — validates all LLM engines (Groq, Gemini, Ollama) at boot with clear ✅/❌ status banner
+- **Twitch commands** — `!move`, `!dance`, `!wave`, `!clap`, `!think`, `!shrug`, `!status` with 10s per-user cooldown
+- **Unit tests** — 30+ tests covering expression detection, language detection, text preprocessing, number-to-words
+- **Version tracking** — `__version__ = "0.26.0"` in `main.py`
+
+### Fixed
+- **Kokoro TTS model paths** — code now searches for both flat (`kokoro-v1.0.onnx`) and legacy nested layout
+- **Windows Ollama detection** — replaced Linux-only `pgrep` with `tasklist` on Windows (cross-platform)
+
+### Changed
+- `twitch_bot.py` expanded from 1 command (`!hello`) to 8 commands with mascot server integration
+- Deleted unused backup sprite files (`neutral_backup.png`, `talk_a_backup.png`)
+- Updated `README.md` with current project structure, Twitch commands, corrected Kokoro paths
+
 ## [0.25.0] — 2026-02-27
 
 ### Added

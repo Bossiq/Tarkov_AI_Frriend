@@ -371,7 +371,7 @@ class MascotServer:
                 "uptime_human": _format_uptime(uptime),
                 "mascot_clients": len(self._clients),
                 "current_state": self._state,
-                "version": "0.28.0",
+                "version": "0.29.0",
             }
             if self._get_status:
                 try:

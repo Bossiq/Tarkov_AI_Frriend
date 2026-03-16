@@ -101,7 +101,7 @@ from voice_output import VoiceOutput  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
-__version__ = "0.28.0"
+__version__ = "0.29.0"
 
 
 class PMCOverwatch:
@@ -142,7 +142,7 @@ class PMCOverwatch:
         )
         self._screen_enabled = screen_enabled
         self._screen_commentary = os.getenv("SCREEN_COMMENTARY", "true").lower() in ("true", "1")
-        self._screen_commentary_interval = int(os.getenv("SCREEN_COMMENTARY_INTERVAL", "30"))
+        self._screen_commentary_interval = int(os.getenv("SCREEN_COMMENTARY_INTERVAL", "20"))
 
         # ── Sound Effects ─────────────────────────────────────────────
         try:
@@ -310,20 +310,10 @@ class PMCOverwatch:
         self.log(f"╚══════════════════════════════════════════════╝")
         self.log("")
 
-        # Check Groq
+        # Check Groq (just validate key exists — don't waste rate limit tokens)
         groq_key = os.getenv("GROQ_API_KEY", "")
         if groq_key:
-            try:
-                from groq import Groq
-                client = Groq(api_key=groq_key)
-                client.chat.completions.create(
-                    model=os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
-                    messages=[{"role": "user", "content": "hi"}],
-                    max_tokens=1,
-                )
-                self.log("[Health] Groq     ✅ ready")
-            except Exception as e:
-                self.log(f"[Health] Groq     ❌ {str(e)[:60]}")
+            self.log("[Health] Groq     ✅ key configured")
         else:
             self.log("[Health] Groq     ⬚  no API key")
 
@@ -558,12 +548,18 @@ class PMCOverwatch:
         self.log("[Mic] Listening stopped.")
         logger.info("Listening thread stopped")
 
-    # ── Screen commentary thread ──────────────────────────────────────
+    # ── Screen vision thread (cached context + reactions) ──────────────
     def _screen_commentary_thread(self) -> None:
-        """Periodically analyze screen and let AI comment."""
-        logger.info("Screen commentary thread started (interval=%ds)",
+        """Background thread: updates vision cache every ~20s.
+        
+        - Calls brain.update_vision_cache() which sends 1 Gemini Vision request
+        - Cache is used by ALL voice interactions (no extra API call)
+        - If something exciting is detected, speaks a reaction
+        - Math: 3 req/min × 480 min = 1440 (fits in 1500 RPD Gemini limit)
+        """
+        logger.info("Vision cache thread started (interval=%ds)",
                      self._screen_commentary_interval)
-        self.log("[Screen] AI commentary active")
+        self.log("[Screen] AI vision active (cached context every %ds)" % self._screen_commentary_interval)
 
         while self._running and not self._shutdown.is_set():
             if self._shutdown.wait(timeout=self._screen_commentary_interval):
@@ -576,7 +572,8 @@ class PMCOverwatch:
                 continue
 
             try:
-                reaction = self._brain.analyze_screen(frame_path)
+                # Update cache + optionally get a reaction
+                reaction = self._brain.update_vision_cache(frame_path)
                 if reaction:
                     self.log(f"[PMC] {reaction}")
                     self._mascot.set_mode("speaking")
@@ -589,9 +586,9 @@ class PMCOverwatch:
                     if self._running:
                         self._mascot.set_mode("listening")
             except Exception:
-                logger.debug("Screen commentary error", exc_info=True)
+                logger.debug("Vision cache update error", exc_info=True)
 
-        logger.info("Screen commentary thread stopped")
+        logger.info("Vision cache thread stopped")
 
     # ── Core interaction pipeline ─────────────────────────────────────
     def _process_interaction(
@@ -656,7 +653,10 @@ class PMCOverwatch:
                     detected_lang, detected_lang.upper() if detected_lang else "??"
                 )
                 self.log(f"[You] ({lang_label}) {transcription}")
-                text_prompt = transcription
+                # Prepend detected language so the LLM knows which language to reply in.
+                # This prevents replying in Russian when the user spoke English.
+                lang_hint = f"[LANG:{detected_lang or 'en'}] " if detected_lang else ""
+                text_prompt = lang_hint + transcription
                 self._vo.set_language_hint(detected_lang or "en")
 
             except Exception:
@@ -669,13 +669,11 @@ class PMCOverwatch:
         if not text_prompt:
             return
 
-        # ── Add screen context if available ───────────────────────────
-        if self._screen_enabled and self._screen.available:
-            frame_path = self._screen.get_latest_frame_path()
-            if frame_path:
-                screen_ctx = self._brain.get_screen_context(frame_path)
-                if screen_ctx:
-                    text_prompt += screen_ctx
+        # ── Add cached screen context (NO API call — reads from cache) ──
+        if self._screen_enabled:
+            screen_ctx = self._brain.get_screen_context()
+            if screen_ctx:
+                text_prompt += screen_ctx
 
         # ── Stream response ───────────────────────────────────────────
         self._mascot.set_mode("thinking")

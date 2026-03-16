@@ -96,24 +96,24 @@ const CONFIG = {
   characterFBX: '/models/altyn_boss.fbx',
   weaponGLB: '/models/rpk_gold.glb',
 
-  // Character setup
-  characterScale: 1.8,        // Scale factor for the character
+  // Character setup — small companion that patrols the screen edges
+  characterScale: 0.55,       // Small chibi companion (fits 2560×1440)
   floorOffset: 0.15,          // Y offset to fix sunken origin
   weaponBone: 'mixamorigRightHand', // Bone to parent weapon to
-  weaponScale: 45,            // Compensates for FBX cm→m scaling
-  weaponOffset: { x: 3, y: 0, z: 8 },  // Grip position in bone-local units
-  weaponRotation: { x: -1.57, y: -2.64, z: 0 }, // Barrel pointing outward (flipped 180°)
+  weaponScale: 28,            // Compensates for FBX cm→m scaling
+  weaponOffset: { x: 5, y: -2, z: 3 },  // Grip in right hand, stock toward body
+  weaponRotation: { x: -1.40, y: -1.80, z: 0.25 }, // Barrel forward-right, rifle carry pose
 
-  // Camera
+  // Camera — pulled back for small character
   cameraFOV: 45,
-  cameraDistance: 6,
-  cameraHeight: 1.5,
+  cameraDistance: 10,
+  cameraHeight: 1.0,
 
-  // Movement
-  moveSpeed: 0.03,            // World units per frame
-  turnSpeed: 0.08,            // Radians per frame for smooth turning
+  // Movement — wider range so mascot patrols full screen
+  moveSpeed: 0.05,            // Faster to traverse wider screen
+  turnSpeed: 0.10,            // Snappier turning
   groundY: -1.0,              // Y position of ground plane
-  screenBoundsX: 5.0,         // How far left/right the character can go
+  screenBoundsX: 8.0,         // Full screen patrol range
 
   // Glow
   glowColor: 0x4caf50,        // Green
@@ -131,8 +131,8 @@ const state = {
   amplitude: 0,
   x: 0,                       // Current X position in world space
   targetX: 0,                 // Target X position
-  rotationY: 0,               // Current facing rotation
-  targetRotationY: 0,         // Target facing rotation
+  rotationY: Math.PI,          // Start facing camera (mesh has 180° base rotation)
+  targetRotationY: Math.PI,    // Idle = face camera
   isWalking: false,
   currentAnimName: 'idle',
 };
@@ -224,6 +224,10 @@ async function loadCharacter() {
     fbxLoader.load(CONFIG.characterFBX, (fbx) => {
       // Scale the character
       fbx.scale.setScalar(CONFIG.characterScale * 0.01); // FBX is in cm
+      // Rotate the mesh 180° to face the camera (+Z direction).
+      // The FBX model from Mixamo faces -Z by default.
+      // This makes movement rotations work correctly.
+      fbx.rotation.y = Math.PI;
 
       // Enable shadows & fix materials for brightness
       fbx.traverse((child) => {
@@ -270,14 +274,19 @@ async function loadCharacter() {
         actions['idle'] = mixer.clipAction(clip);
       }
 
-      // Find skeleton for weapon parenting
+      // Find skeleton for weapon parenting & log all available bones
+      const boneNames = [];
       fbx.traverse((child) => {
         if (child.isSkinnedMesh && child.skeleton) {
           skeleton = child.skeleton;
         }
+        if (child.isBone) {
+          boneNames.push(child.name);
+        }
       });
 
       console.log('[3D] Character loaded:', fbx.children.length, 'objects');
+      console.log('[3D] Available bones:', boneNames.join(', '));
       resolve(fbx);
     }, 
     (progress) => {
@@ -459,6 +468,17 @@ function createWalkAnimation() {
 }
 
 async function loadAnimations() {
+  // Build a set of all bone names in the character for retargeting
+  const validBones = new Set();
+  if (characterMesh) {
+    characterMesh.traverse((child) => {
+      if (child.isBone || child.isObject3D) {
+        validBones.add(child.name);
+      }
+    });
+  }
+  console.log('[3D] Valid bone count for retargeting:', validBones.size);
+
   let count = 0;
   for (const [name, url] of Object.entries(ANIM_FILES)) {
     try {
@@ -466,8 +486,28 @@ async function loadAnimations() {
         fbxLoader.load(url, res, undefined, rej)
       );
       if (fbx.animations && fbx.animations[0]) {
-        const clip = fbx.animations[0];
+        let clip = fbx.animations[0];
         clip.name = name;
+
+        // Retarget: filter out tracks for bones that don't exist in the model
+        if (validBones.size > 0) {
+          const validTracks = [];
+          let stripped = 0;
+          for (const track of clip.tracks) {
+            // Track name format: "boneName.property" (e.g. "mixamorigHips.position")
+            const boneName = track.name.split('.')[0];
+            if (validBones.has(boneName)) {
+              validTracks.push(track);
+            } else {
+              stripped++;
+            }
+          }
+          if (stripped > 0) {
+            console.log(`[3D] ${name}: kept ${validTracks.length} tracks, stripped ${stripped} orphan tracks`);
+            clip = new THREE.AnimationClip(name, clip.duration, validTracks);
+          }
+        }
+
         animations[name] = clip;
         actions[name] = mixer.clipAction(clip);
         count++;
@@ -650,18 +690,23 @@ function updateMovement() {
     state.x = Math.max(-CONFIG.screenBoundsX, Math.min(CONFIG.screenBoundsX, state.x));
 
     // Set target rotation (face direction of movement)
+    // The mesh has a 180° base rotation (fbx.rotation.y = PI) to face the camera.
+    // So characterGroup.rotation.y = 0 means facing camera (front view).
+    // For a +Z-facing model:
+    //   Y = -PI/2 → face right (+X direction)
+    //   Y = +PI/2 → face left (-X direction)
     if (dx > 0) {
-      state.targetRotationY = -Math.PI / 2; // Face right
+      state.targetRotationY = Math.PI - Math.PI / 2; // Face right (PI/2)
     } else {
-      state.targetRotationY = Math.PI / 2;  // Face left
+      state.targetRotationY = Math.PI + Math.PI / 2;  // Face left (3*PI/2)
     }
   } else {
-    // Arrived at target
+    // Arrived at target — face camera again
     if (state.isWalking) {
       state.isWalking = false;
-      // Smooth stop: play walk-to-stop transition if available
+      state.targetRotationY = Math.PI; // Face camera when idle
       if (actions['walk_to_stop']) {
-        playAnim('walk_to_stop', 0.3, false); // plays once then returns to idle
+        playAnim('walk_to_stop', 0.3, false);
       } else {
         playAnim('idle', 0.4, true);
       }
@@ -687,9 +732,11 @@ function updateMovement() {
 let lastAutoMove = Date.now();
 function autonomousMovement() {
   const now = Date.now();
-  if (now - lastAutoMove > 20000 + Math.random() * 15000) {
-    if (!state.isWalking && Math.random() > 0.4) {
-      state.targetX = (Math.random() - 0.5) * CONFIG.screenBoundsX * 1.5;
+  // Move more frequently for a lively companion feel (every 12-20s)
+  if (now - lastAutoMove > 12000 + Math.random() * 8000) {
+    if (!state.isWalking && Math.random() > 0.3) {
+      // Pick a random spot across the full screen width
+      state.targetX = (Math.random() - 0.5) * CONFIG.screenBoundsX * 1.8;
     }
     lastAutoMove = now;
   }

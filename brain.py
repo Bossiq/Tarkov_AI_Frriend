@@ -70,13 +70,14 @@ _SYSTEM_CORE = (
     "- Never use abbreviations like btw, imo, tbh, idk, ngl, afk, lol, lmao. "
     "Always write full words.\n\n"
     "CRITICAL LANGUAGE RULES:\n"
-    "- Detect the user's language and REPLY IN THE SAME LANGUAGE.\n"
+    "- The user's message may begin with [LANG:xx] (e.g. [LANG:en], [LANG:ro], [LANG:ru]). "
+    "This is the DETECTED SPOKEN LANGUAGE. Always reply in that language.\n"
+    "- If no [LANG:xx] tag, detect the language from the text.\n"
     "- You speak: English, Russian, Romanian.\n"
     "- NEVER MIX LANGUAGES IN ONE RESPONSE. Every word in the same language.\n"
-    "- EXCEPTION: if user asks to translate, each language block must be a COMPLETE sentence.\n"
-    "- If user writes in Russian/Cyrillic → reply fully in Russian. "
+    "- If user speaks Russian → reply fully in Russian. "
     "Use natural slang: 'братан', 'чел', 'норм', 'кайф'.\n"
-    "- If user writes in Romanian → reply fully in Romanian.\n"
+    "- If user speaks Romanian → reply fully in Romanian.\n"
     "- ALWAYS finish your complete thought. Never stop mid-sentence.\n\n"
     + LLM_EXPRESSION_PROMPT
     + LLM_GESTURE_PROMPT
@@ -169,7 +170,9 @@ class Brain:
     """
 
     # Engine priority order
-    _ENGINE_CHAIN = ["groq", "gemini", "ollama"]
+    # Text engine chain: Groq (fast cloud) → Ollama (local fallback).
+    # Gemini is NOT in this chain — it's reserved for vision only.
+    _ENGINE_CHAIN = ["groq", "ollama"]
 
     def __init__(self) -> None:
         self._interrupt = threading.Event()
@@ -262,9 +265,8 @@ class Brain:
         logger.info("Brain active: %s (%s) | engines: %s",
                      self._engine, self._model, " -> ".join(available))
 
-        # Vision state
-        self._last_vision_time: float = 0.0
-        self._last_vision_result: str = ""
+        # Vision cache (see __init_vision_cache for fields)
+        self.__init_vision_cache()
 
         # Pre-fetch live Tarkov data on startup (non-blocking cache)
         self._live_data: str = ""
@@ -337,13 +339,23 @@ class Brain:
         return True
 
     def _failover(self, failed_engine: str, exc: Exception) -> bool:
-        """Try to failover to the next available engine. Returns True if switched."""
+        """Try to failover to the next available engine.
+        
+        Cloud engines (Groq, Gemini) get a retry before falling to Ollama,
+        since transient errors (network, 500s) are common and shouldn't
+        immediately cascade to the slow local fallback.
+        
+        Returns True if switched to a new engine.
+        """
         cooldown = 0.0
         if _is_rate_limit_error(exc):
             cooldown = _parse_cooldown_seconds(exc)
 
         next_eng = self._next_engine(failed_engine)
-        if next_eng and self._switch_engine(
+        if not next_eng:
+            return False
+            
+        if self._switch_engine(
             next_eng, cooldown_source=failed_engine, cooldown_seconds=cooldown
         ):
             logger.info("Failover: %s -> %s (cooldown %.0fs)",
@@ -352,28 +364,18 @@ class Brain:
         return False
 
     def _warmup(self) -> None:
-        """Send a tiny request to pre-load the model."""
+        """Send a tiny request to pre-load the model (Ollama only — cloud APIs don't need it)."""
+        if self._engine not in ("ollama",):
+            logger.info("Skipping warmup for cloud engine %s (saves rate limit)", self._engine)
+            return
         try:
             logger.info("Warming up %s (%s)", self._engine, self._model)
-            if self._engine == "ollama":
-                self._ollama_client.chat(
-                    model=self._model,
-                    messages=[{"role": "user", "content": "hi"}],
-                    options={"num_predict": 1, "num_ctx": 32},
-                    keep_alive=_DEFAULT_KEEP_ALIVE,
-                )
-            elif self._engine == "groq":
-                self._groq_client.chat.completions.create(
-                    model=self._model,
-                    messages=[{"role": "user", "content": "hi"}],
-                    max_tokens=1,
-                )
-            elif self._engine == "gemini":
-                self._gemini_client.models.generate_content(
-                    model=self._gemini_model,
-                    contents="hi",
-                    config={"max_output_tokens": 1},
-                )
+            self._ollama_client.chat(
+                model=self._model,
+                messages=[{"role": "user", "content": "hi"}],
+                options={"num_predict": 1, "num_ctx": 32},
+                keep_alive=_DEFAULT_KEEP_ALIVE,
+            )
             logger.info("Brain warm-up complete (%s)", self._engine)
         except Exception:
             logger.warning("Warm-up failed (non-fatal)", exc_info=True)
@@ -571,10 +573,28 @@ class Brain:
                 if use_fallback:
                     self._model = old_model
 
+                # -- Cloud engines get 1 retry on transient errors --
+                # Rate-limit errors (429) should failover immediately,
+                # but transient errors (network, 500) deserve a retry
+                # before cascading to Ollama.
+                is_rate_limit = _is_rate_limit_error(exc)
+                is_cloud = self._engine in ("groq", "gemini")
+
+                if is_cloud and not is_rate_limit and retry_count == 0:
+                    retry_count += 1
+                    delay = 1.0  # quick 1s retry for cloud transient errors
+                    logger.info("Cloud engine transient error — retrying %s in %.0fs",
+                                self._engine, delay)
+                    time.sleep(delay)
+                    buffer = ""
+                    full_response = ""
+                    continue
+
                 # -- Try failover to next engine in chain --
                 if self._failover(self._engine, exc):
                     buffer = ""
                     full_response = ""
+                    retry_count = 0  # reset retries for the new engine
                     continue
 
                 # -- No failover available, retry with backoff --
@@ -595,132 +615,132 @@ class Brain:
         self._memory.clear()
         logger.info("Conversation memory cleared")
 
-    # ── Screen Vision Analysis ─────────────────────────────────────────
-    _VISION_PROMPT = (
-        "You are an AI co-host watching Escape from Tarkov gameplay live. "
-        "Look at this screenshot and give a SHORT, ENERGETIC reaction (1-2 sentences). "
-        "Focus on WHAT IS HAPPENING RIGHT NOW: combat, looting, injuries, map location, "
-        "inventory management, trader screens, or menu screens.\n\n"
-        "RULES:\n"
-        "- Be casual and hyped like a Twitch co-host.\n"
-        "- If nothing interesting is happening, say NOTHING (return empty).\n"
-        "- Never use markdown, lists, or formatting.\n"
-        "- Never say 'I can see' or 'screenshot shows'. Talk like you're watching live.\n"
-        "- If you see combat or danger, react with urgency!\n"
-        "- If it's a menu or loading screen, stay quiet (return empty).\n"
+    # ── Screen Vision — Cached Context System ─────────────────────────
+    # Gemini Vision is used ONLY for screen analysis (never for text).
+    # A background thread calls update_vision_cache() every ~20s.
+    # All consumers read from the cache via get_cached_screen_context().
+    # This prevents double API calls and keeps within 1500 RPD Gemini limit.
+    # Math: 3 req/min × 60 min × 8 hours = 1440 requests (fits in 1500 RPD).
+
+    _VISION_DESCRIBE_PROMPT = (
+        "Describe this Escape from Tarkov gameplay screenshot in ONE brief "
+        "sentence. Focus on the KEY game state: what map area/location is "
+        "visible, is the player in combat, looting, healing, in inventory, "
+        "in a menu, in a loading screen, at a trader, etc. "
+        "Be specific about what you see (weapon in hand, health status, "
+        "enemies visible, loot on ground). If it's a menu or loading screen, "
+        "just say 'menu'."
     )
 
-    _VISION_COOLDOWN = 10.0  # seconds between vision requests
+    _VISION_REACT_PROMPT = (
+        "You are watching an Escape from Tarkov stream live. "
+        "React to this screenshot in 1-2 SHORT, HYPED sentences. "
+        "Be casual like a Twitch co-host. If nothing interesting, return empty. "
+        "Never use markdown. Never say 'I see' or 'screenshot'. "
+        "If combat/danger, react with urgency!"
+    )
 
-    def analyze_screen(self, frame_path: str) -> Optional[str]:
-        """Analyze a gameplay screenshot via Gemini Vision.
+    def __init_vision_cache(self):
+        """Initialize the vision cache (called from __init__)."""
+        self._vision_cache: str = ""  # cached screen description
+        self._vision_cache_time: float = 0.0
+        self._vision_lock = threading.Lock()
 
-        Returns a short reaction string, or None if:
-          - Gemini is not available
-          - Cooldown hasn't elapsed
-          - Nothing interesting was detected
+    @property
+    def cached_screen_context(self) -> str:
+        """Get the latest cached screen description (thread-safe)."""
+        with self._vision_lock:
+            return self._vision_cache
 
-        Uses Gemini exclusively (only engine with vision support).
+    def update_vision_cache(self, frame_path: str) -> Optional[str]:
+        """Analyze a frame via Gemini Vision and update the cached context.
+        
+        Returns a reaction string if something interesting is happening,
+        or None if it's a boring/menu screen. Always updates the cache
+        regardless of whether a reaction is returned.
+        
+        This should be called by a background thread every ~20 seconds.
         """
         if not self._gemini_client:
             return None
 
-        # Rate limit
-        now = time.monotonic()
-        if now - self._last_vision_time < self._VISION_COOLDOWN:
-            return None
-        self._last_vision_time = now
-
         try:
-            # Read and encode the image
             with open(frame_path, "rb") as f:
                 image_bytes = f.read()
-
             image_b64 = base64.b64encode(image_bytes).decode("utf-8")
 
-            # Send to Gemini Vision
-            response = self._gemini_client.models.generate_content(
+            image_part = {
+                "inline_data": {
+                    "mime_type": "image/jpeg",
+                    "data": image_b64,
+                }
+            }
+
+            # 1. Get a description for the cache (always)
+            desc_response = self._gemini_client.models.generate_content(
                 model=self._gemini_model,
-                contents=[
-                    {
-                        "role": "user",
-                        "parts": [
-                            {"text": self._VISION_PROMPT},
-                            {
-                                "inline_data": {
-                                    "mime_type": "image/jpeg",
-                                    "data": image_b64,
-                                }
-                            },
-                        ],
-                    }
-                ],
-                config={"max_output_tokens": 100, "temperature": 0.7},
+                contents=[{
+                    "role": "user",
+                    "parts": [
+                        {"text": self._VISION_DESCRIBE_PROMPT},
+                        image_part,
+                    ],
+                }],
+                config={"max_output_tokens": 80, "temperature": 0.3},
             )
 
-            result = response.text.strip() if response.text else ""
+            description = desc_response.text.strip() if desc_response.text else ""
 
-            # Filter out empty / non-interesting responses
-            if not result or len(result) < 5:
-                return None
+            # Update the cache
+            with self._vision_lock:
+                if description and description.lower() != "menu":
+                    self._vision_cache = description
+                    self._vision_cache_time = time.monotonic()
+                # If "menu", keep the old cache (still relevant)
 
-            self._last_vision_result = result
-            logger.info("Vision analysis: %s", result[:80])
-            return result
+            logger.info("Vision cache updated: %s", description[:80] if description else "(empty)")
 
-        except Exception:
-            logger.debug("Vision analysis failed", exc_info=True)
+            # 2. Check if this is reaction-worthy (combat, danger, big loot)
+            #    Only do this every other call to save rate limit
+            react_keywords = ("combat", "fight", "shoot", "dead", "kill",
+                              "blood", "grenade", "enemy", "boss", "loot",
+                              "extract", "injured", "heavy bleed")
+            should_react = any(kw in description.lower() for kw in react_keywords)
+
+            if should_react:
+                react_response = self._gemini_client.models.generate_content(
+                    model=self._gemini_model,
+                    contents=[{
+                        "role": "user", 
+                        "parts": [
+                            {"text": self._VISION_REACT_PROMPT},
+                            image_part,
+                        ],
+                    }],
+                    config={"max_output_tokens": 60, "temperature": 0.8},
+                )
+                reaction = react_response.text.strip() if react_response.text else ""
+                if reaction and len(reaction) > 5:
+                    logger.info("Vision reaction: %s", reaction[:80])
+                    return reaction
+
             return None
 
-    def get_screen_context(self, frame_path: Optional[str]) -> str:
-        """Get a brief screen context string to append to user prompts.
+        except Exception:
+            logger.debug("Vision cache update failed", exc_info=True)
+            return None
 
-        This gives the AI awareness of what's on screen during
-        normal voice interactions.
+    def get_screen_context(self, frame_path: Optional[str] = None) -> str:
+        """Get the cached screen context string to inject into prompts.
+        
+        Returns a string like '[Screen: Player looting in Dorms, Customs]'
+        or empty string if no cache available. Does NOT call any API —
+        just reads the cache.
         """
-        if not frame_path or not self._gemini_client:
-            return ""
-
-        try:
-            with open(frame_path, "rb") as f:
-                image_bytes = f.read()
-
-            image_b64 = base64.b64encode(image_bytes).decode("utf-8")
-
-            response = self._gemini_client.models.generate_content(
-                model=self._gemini_model,
-                contents=[
-                    {
-                        "role": "user",
-                        "parts": [
-                            {
-                                "text": (
-                                    "Describe this Tarkov gameplay screenshot in "
-                                    "one brief sentence. Focus only on the key visible "
-                                    "game state (combat, inventory, map area, health). "
-                                    "If it's a menu or loading screen, say 'menu'.\n"
-                                )
-                            },
-                            {
-                                "inline_data": {
-                                    "mime_type": "image/jpeg",
-                                    "data": image_b64,
-                                }
-                            },
-                        ],
-                    }
-                ],
-                config={"max_output_tokens": 50, "temperature": 0.3},
-            )
-
-            ctx = response.text.strip() if response.text else ""
-            if ctx and ctx.lower() != "menu":
-                return f"\n[Screen context: {ctx}]"
-            return ""
-
-        except Exception:
-            logger.debug("Screen context failed", exc_info=True)
-            return ""
+        ctx = self.cached_screen_context
+        if ctx:
+            return f"\n[Screen context: {ctx}]"
+        return ""
 
     # -- Streaming backends ----------------------------------------------------
     def _stream_tokens(self, messages: list[dict]) -> Generator[str, None, None]:

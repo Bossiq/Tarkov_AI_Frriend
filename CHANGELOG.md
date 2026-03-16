@@ -2,6 +2,28 @@
 
 All notable changes to PMC Overwatch are documented here.
 
+## [0.29.0] — 2026-03-16
+
+### Changed
+- **Engine architecture** — Gemini removed from text engine chain, now reserved for vision only. Text: Groq → Ollama
+- **Vision system** — Replaced dual API calls (analyze_screen + get_screen_context) with single cached vision system. Background thread updates cache every 20s via Gemini Vision; all voice interactions read from cache (zero extra API calls)
+- **Mascot scale** — Reduced from 1.1 to 0.55 for small stream companion feel
+- **Mascot rotation** — Fixed backwards walking bug with 180° base rotation on FBX mesh. Character now faces correct direction when walking and faces camera when idle
+- **Animation retargeting** — Strips ~30 orphan bone tracks per Mixamo animation (finger bones not in simplified skeleton)
+- **Screen bounds** — Widened from 5.0 to 8.0 for full-screen patrol
+- **Movement speed** — Increased from 0.03 to 0.05, turn speed from 0.08 to 0.10
+- **Autonomous movement** — More frequent (12-20s intervals, was 20-35s)
+- **Whisper prompt** — Trimmed from ~500 to ~60 lines, removed language bias
+- **Language detection** — [LANG:xx] tag injected into prompts from Whisper detection
+- **Commentary interval** — Default reduced from 30s to 20s
+
+### Fixed
+- LLM engine failover now retries cloud engines once before cascading to Ollama
+- Health check no longer makes unnecessary API calls to Groq
+- Warmup skipped for cloud engines (only warms local Ollama)
+- Gemini rate limits no longer affect text responses (separate budgets)
+- README architecture diagram updated for dual-engine + vision architecture
+
 ## [0.28.0] — 2026-03-12
 
 ### Added

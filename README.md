@@ -6,14 +6,14 @@
 
 <p align="center">
   <strong>Real-time AI voice companion for Escape from Tarkov streaming</strong><br/>
-  3D Animated Mascot • Triple-Engine LLM • Neural Voice • Twitch Integration<br/>
-  <sub>v0.28.0</sub>
+  3D Animated Mascot • Groq LLM + Gemini Vision • Neural Voice • Twitch Integration<br/>
+  <sub>v0.29.0</sub>
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white" alt="Python" />
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS-lightgrey?logo=windows" alt="Platform" />
-  <img src="https://img.shields.io/badge/LLM-Groq%20%2B%20Gemini%20%2B%20Ollama-FF6B35" alt="LLM" />
+  <img src="https://img.shields.io/badge/LLM-Groq%20%2B%20Ollama-FF6B35" alt="LLM" />
   <img src="https://img.shields.io/badge/TTS-edge--tts%20%2B%20Kokoro-22c55e" alt="TTS" />
   <img src="https://img.shields.io/badge/STT-Whisper%20%2B%20Groq-ef4444" alt="STT" />
   <img src="https://img.shields.io/badge/VAD-Silero%20Neural-7c3aed" alt="VAD" />
@@ -28,7 +28,7 @@ PMC Overwatch is an **AI-powered voice companion** designed for Escape from Tark
 
 **Key highlights:**
 - 🎙️ Speaks back in real-time with Microsoft Neural Voices (edge-tts)
-- 🧠 Triple-engine LLM with automatic failover (Groq → Gemini → Ollama)
+- 🧠 Dual-engine LLM with automatic failover (Groq → Ollama) + Gemini Vision for screen awareness
 - 🎮 Deep Tarkov knowledge: quests, maps, ammo tables, bosses, flee market prices
 - 🤖 3D animated mascot with Mixamo motion-captured animations in OBS
 - 🔊 Neural voice activity detection (Silero VAD) with barge-in support
@@ -52,9 +52,9 @@ PMC Overwatch is an **AI-powered voice companion** designed for Escape from Tark
 │  ┌─────────────┐   ┌────────────┐   ┌▼───────────────┐              │
 │  │ voice_input  │──▶│   brain    │──▶│ mascot_server  │              │
 │  │              │   │            │   │ FastAPI+WS:8420│              │
-│  │ Silero VAD   │   │ Groq  ────┤   └────────────────┘              │
-│  │ Whisper STT  │   │ Gemini ───┤                                    │
-│  │ Noise Reduce │   │ Ollama ───┘   ┌────────────────┐              │
+│  │ Silero VAD   │   │ Groq ─────┤   └────────────────┘              │
+│  │ Whisper STT  │   │ Ollama ───┘                                    │
+│  │ Noise Reduce │   │               ┌────────────────┐              │
 │  └─────────────┘   │               │ voice_output    │              │
 │                     │ stream_       │ edge-tts (pri)  │              │
 │                     │ sentences() ─▶│ Kokoro  (bkup)  │              │
@@ -62,9 +62,10 @@ PMC Overwatch is an **AI-powered voice companion** designed for Escape from Tark
 │                                     └────────────────┘              │
 │  ┌──────────────┐   ┌─────────────┐  ┌──────────────┐              │
 │  │ video_capture │   │ expression  │  │ sound_effects│              │
-│  │ Screen+Gemini│   │ _engine     │  │ Tactical SFX │              │
-│  │ Vision       │   │ 12 emotions │  └──────────────┘              │
-│  └──────────────┘   └─────────────┘                                  │
+│  │ Screen(1 FPS)│   │ _engine     │  │ Tactical SFX │              │
+│  │ Gemini Vision│   │ 12 emotions │  └──────────────┘              │
+│  │ (cache/20s)  │   └─────────────┘                                  │
+│  └──────────────┘                                                    │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -82,14 +83,14 @@ PMC Overwatch is an **AI-powered voice companion** designed for Escape from Tark
 | **Noise Reduction** | noisereduce (spectral) | Strips background noise before transcription |
 | **Language Detection** | Auto + per-sentence | English, Russian, Romanian — locks language per response |
 
-### AI Brain (Triple-Engine LLM)
-| Engine | Speed | Model | Failover |
-|--------|-------|-------|----------|
-| **Groq Cloud** | 250+ tok/s | llama-3.3-70b-versatile | Primary — rate-limit auto-fallback to 8b-instant |
-| **Google Gemini** | ~100 tok/s | gemini-2.0-flash | Secondary — also provides screen vision analysis |
-| **Ollama Local** | 10-60 tok/s | qwen2.5:3b | Offline fallback — auto-starts/stops with app |
+### AI Brain (Dual-Engine LLM + Vision)
+| Engine | Role | Model | Notes |
+|--------|------|-------|-------|
+| **Groq Cloud** | Text (primary) | llama-3.3-70b-versatile | 250+ tok/s, auto-fallback to 8b-instant on rate limit |
+| **Ollama Local** | Text (fallback) | qwen2.5:3b | Offline emergency backup, auto-starts with app |
+| **Gemini** | Vision only | gemini-2.0-flash | Screen analysis every 20s, cached context injected into all prompts |
 
-Rate limits are tracked with cooldown timers. When one engine hits its limit, the system seamlessly switches to the next and auto-restores when the cooldown expires.
+Groq handles ALL text (chat + responses). Gemini is reserved exclusively for screen vision analysis (1,500 req/day free tier = 8 hours of streaming). Rate limits are tracked with cooldown timers. When Groq hits its limit, the system fails over to Ollama and auto-restores when the cooldown expires.
 
 ### 3D Mascot (OBS Overlay)
 | Feature | Description |
@@ -106,7 +107,7 @@ Rate limits are tracked with cooldown timers. When one engine hits its limit, th
 |---------|-------------|
 | **Twitch Chat Bot** | Responds to chat, accepts viewer commands |
 | **Twitch Commands** | `!move` `!dance` `!wave` `!clap` `!think` `!shrug` `!status` — with 10s per-user cooldown |
-| **Screen Commentary** | Gemini Vision analyzes gameplay and provides auto-commentary |
+| **Screen Vision** | Gemini analyzes gameplay every 20s, cached context injected into every AI prompt |
 | **Dashboard UI** | Web control panel at `localhost:8420` with real-time status |
 | **Tarkov Knowledge** | Quest database, ammo tables, map extracts, boss info, flea market |
 

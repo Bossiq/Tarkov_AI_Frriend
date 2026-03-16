@@ -748,11 +748,11 @@ class VoiceInput:
             # Covers: game terms, 1.0 content, maps, weapons, bosses,
             # traders, items, mechanics, EFT slang, and Twitch lingo.
             initial_prompt = (
-                # ── Core game & factions ──
+                # ── Core game terminology (language-neutral) ──
                 "Escape from Tarkov, Tarkov, EFT, Battlestate Games, BSG, Nikita, "
                 "PMC, Scav, Scavs, player Scav, USEC, BEAR, "
 
-                # ── Maps (incl. 1.0 + upcoming) ──
+                # ── Maps ──
                 "Customs, Woods, Interchange, Shoreline, Reserve, Labs, "
                 "Streets of Tarkov, Streets, Lighthouse, Ground Zero, Factory, "
                 "Terminal, Harbour, Icebreaker, End of Line, "
@@ -765,225 +765,45 @@ class VoiceInput:
                 "Prapor, Therapist, Skier, Peacekeeper, Mechanic, Ragman, "
                 "Jaeger, Ref, Fence, BTR Driver, Lightkeeper, "
 
-                # ── Weapons & attachments (incl. 1.0 additions) ──
+                # ── Weapons ──
                 "AK-74, AK-74N, AKS-74U, AK-12, AK-103, AK-104, AK-308, "
                 "M4A1, M16, HK 416, MDR, SCAR, SA-58, "
                 "Mosin, DVL, SV-98, SVD, RSASS, SR-25, M1A, "
                 "MP5, MP7, MPX, UMP, PP-19, Vector, P90, "
                 "AS VAL, VSS Vintorez, RPK, RPK-16, PKM, "
-                "G36, PPSh, AA-12, M60, AUG, Radian Model 1, "
-                "Saiga-12, MP-133, MP-153, TOZ, KS-23, "
-                "Glock, Desert Eagle, SR-1MP, TT pistol, "
-                "Hybrid 46 suppressor, Valday scope, FLIR, REAP-IR, "
+                "Saiga-12, MP-133, TOZ, KS-23, Glock, Desert Eagle, "
 
-                # ── Ammo tiers ──
+                # ── Ammo ──
                 "M995, M856A1, M855A1, M61, M62, M80, "
-                "BS ammo, BT ammo, BP ammo, PP ammo, SNB, LPS Gzh, "
-                "SP-6, SPP, SP-5, PBP, AP 6.3, Pst gzh, "
+                "BS ammo, BT ammo, BP ammo, SNB, LPS Gzh, "
                 "AP-20, Flechette, Magnum buckshot, "
 
-                # ── Items & keys ──
+                # ── Items ──
                 "LEDX, Salewa, IFAK, morphine, CMS kit, Surv12, "
                 "Red Rebel, SICC case, docs case, keytool, "
-                "graphics card, bitcoin, moonshine, intelligence folder, "
-                "flash drive, dogtags, paracord, "
-                "KIBA key, dorms key, marked room, "
-
-                # ── Containers ──
+                "graphics card, bitcoin, moonshine, flash drive, dogtags, "
                 "Kappa container, Epsilon container, Gamma container, "
-                "Alpha container, Theta container, secure container, "
 
-                # ── Mechanics & gameplay ──
+                # ── Gameplay ──
                 "flea market, hideout, stash, Bitcoin Farm, Scav Case, "
-                "work bench, medstation, intelligence center, "
                 "extracts, exfil, extraction point, V-Ex, "
                 "quest, task, raid, wipe, extract, PMC run, Scav run, "
-                "found in raid, FIR, PvP, PvE, co-op, story mode, "
-                "barter, breach, armor class, penetration, "
-                "BTR, armored train, reconnect, DLSS, "
-
-                # ── EFT community slang ──
+                "found in raid, FIR, PvP, PvE, co-op, "
                 "chad, rat, extract camper, head-eyes, one-tap, "
                 "juiced, kitted, thicc, meta, loot run, "
-                "rat attack, zero to hero, factory gate, "
-                "Tarkov Shooter, Punisher, Gunsmith, "
-                "Sherpa, TarkovLFG, "
 
-                # ── EFT Arena ──
-                "Escape from Tarkov Arena, Arena, battlepass, "
+                # ── Twitch ──
+                "Twitch, stream, streamer, chat, Twitch chat, "
+                "subscriber, sub, donation, dono, bits, raid, follow, "
+                "clip, emote, OBS, overlay, "
 
-                # ── Twitch & streaming ──
-                "Twitch, stream, streamer, streaming, live stream, "
-                "chat, Twitch chat, subscriber, sub, resub, gifted sub, "
-                "donation, dono, bits, cheer, hype train, "
-                "raid, host, follow, follower, "
-                "VOD, clip, highlight, emote, "
-                "Kappa emote, Poggers, PogChamp, KEKW, LUL, "
-                "MonkaS, Sadge, Jebaited, Kreygasm, copium, "
-                "mod, moderator, ban, timeout, "
-                "OBS, overlay, alerts, scene, "
-                "stream sniper, stream sniping, TOS, "
-                "affiliate, partner, "
-                "drops, Twitch drops, watch party, "
+                # ── Romanian greetings (brief — avoids detection bias) ──
+                "Salut, bună ziua, ce faci, mulțumesc, "
+                "hai să mergem, frate, sunt gata, ești gata, "
 
-                # ── Romanian: common phrases & greetings ──
-                "Salut, bună ziua, ce faci, bine, mulțumesc, "
-                "hai să mergem, hai să jucăm, du-te, vino, "
-                "frate, fratele meu, boss, șefu, nea, "
-                "sunt gata, ești gata, pregătit, "
-                "trebuie să, vreau să, pot să, "
-                "stai, așteaptă, repede, grăbește-te, "
-                "pune, ia, dă-mi, uite, vezi, ascultă, "
-                "română, românește, vorbește, spune, "
-
-                # ── Romanian: verb conjugations (Whisper primer) ──
-                "înțeleg, înțelegi, înțelege, înțelegem, înțelegeți, înțeles, "
-                "știu, știi, știe, știm, știți, "
-                "vreau, vrei, vrea, vrem, vreți, "
-                "pot, poți, poate, putem, puteți, "
-                "fac, faci, face, facem, faceți, făcut, "
-                "spun, spui, spune, spunem, spuneți, spus, "
-                "cred, crezi, crede, credem, credeți, "
-                "văd, vezi, vede, vedem, vedeți, văzut, "
-                "aud, auzi, aude, auzim, auziți, auzit, "
-                "sunt, ești, este, suntem, sunteți, "
-                "merg, mergi, merge, mergem, mergeți, mers, "
-                "vin, vii, vine, venim, veniți, venit, "
-                "dau, dai, dă, dăm, dați, dat, "
-                "iau, iei, ia, luăm, luați, luat, "
-                "zic, zici, zice, zicem, ziceți, zis, "
-                "stau, stai, stă, stăm, stați, stat, "
-                "gândesc, gândești, gândește, gândim, gândiți, "
-                "vorbesc, vorbești, vorbește, vorbim, vorbiți, "
-                "ascult, asculți, ascultă, ascultăm, ascultați, "
-                "ajut, ajuți, ajută, ajutăm, ajutați, "
-                "întreb, întrebi, întreabă, întrebăm, întrebați, "
-                "răspund, răspunzi, răspunde, răspundem, răspundeți, "
-                "învăț, înveți, învață, învățăm, învățați, "
-                "citesc, citești, citește, citim, citiți, "
-                "scriu, scrii, scrie, scriem, scrieți, "
-                "caut, cauți, caută, căutăm, căutați, "
-                "găsesc, găsești, găsește, găsim, găsiți, găsit, "
-                "urc, urci, urcă, urcăm, urcați, "
-                "cobor, cobori, coboară, coborâm, coborâți, "
-                "alearg, alergi, aleargă, alergăm, alergați, "
-                "trag, tragi, trage, tragem, trageți, "
-                "arunc, arunci, aruncă, aruncăm, aruncați, "
-
-                # ── Romanian: conversational Q&A ──
-                "ce spui, ce zici, ce faci, ce vrei, "
-                "cum merge, cum e, cum stai, cum a fost, "
-                "unde ești, unde mergi, unde e, "
-                "când plecăm, când începem, când vii, "
-                "de ce, pentru ce, la ce, "
-                "da sigur, nu știu, poate, normal, desigur, "
-                "bine bine, ok bine, aha, mda, exact, corect, "
-                "ce părere ai, ce crezi, serios, chiar, "
-
-                # ── Romanian: Tarkov gameplay ──
-                "raid, raiduri, am intrat în raid, ies din raid, "
-                "quest, questuri, questul, taskuri, misiune, misiuni, "
-                "arma, armă, glonț, gloanțe, armură, rucsac, "
-                "extracție, extrage, ieși, punct de extracție, "
-                "headshot, head-eyes, one-tap, am dat headshot, "
-                "am murit, m-a omorât, l-am omorât, a murit, "
-                "pericol, atenție, dușman, inamicul, scav, scavul, "
-                "loot, lootez, am lootat, ce loot ai, "
-                "stash, ascunzătoare, piața, flea market, "
-                "hideout, baza, Bitcoin Farm, "
-                "wipe, s-a dat wipe, după wipe, "
-
-                # ── Romanian: Tarkov maps & bosses (as spoken) ──
-                "Customs, pe Customs, mergem pe Customs, "
-                "Factory, pe Factory, Labs, pe Labs, "
-                "Interchange, Shoreline, Reserve, Woods, "
-                "Streets, pe Streets, Lighthouse, Ground Zero, "
-                "Reshala, Killa, Shturman, Tagilla, Glukhar, Kaban, "
-                "Prapor, Therapist, Skier, Peacekeeper, Mechanic, Ragman, Jaeger, "
-
-                # ── Romanian: Tarkov community slang ──
-                "chad, rat, extract camper, kitted, juiced, thicc, "
-                "meta, build meta, ce build ai, echipament, "
-                "bine jucat, bravo, super, genial, nebun, "
-                "ce tare, ce nasol, ce rău, ce bine, "
-                "skill issue, am dat-o în bară, norocul meu, "
-                "am făcut-o, l-am luat, am scăpat, "
-                "ce cheater, hacker, suspect, "
-
-                # ── Romanian: Twitch & streaming ──
-                "stream, streamul, pe stream, sunt live, "
-                "chat, în chat, scrieți în chat, "
-                "sub, subscribe, follow, follower, "
-                "donație, donații, raid de stream, "
-                "clip, clipul, emote, emoturi, "
-                "moderator, ban, timeout, "
-
-                # ── Russian: common phrases & greetings ──
-                "Привет, здарова, здрасте, как дела, хорошо, спасибо, "
-                "давай пойдём, айда, погнали, пошли, "
-                "братан, брат, чел, красавчик, дружище, "
-                "я готов, ты готов, повнимательнее, "
-                "надо, хочу, могу, давай, жди, "
-                "стой, подожди, быстрее, беги, "
-                "по-русски, говори, скажи, "
-
-                # ── Russian: verb conjugations (Whisper primer) ──
-                "понимаю, понимаешь, понимает, понимаем, понимаете, понял, "
-                "знаю, знаешь, знает, знаем, знаете, "
-                "хочу, хочешь, хочет, хотим, хотите, "
-                "могу, можешь, может, можем, можете, "
-                "делаю, делаешь, делает, делаем, делаете, сделал, "
-                "говорю, говоришь, говорит, говорим, говорите, сказал, "
-                "думаю, думаешь, думает, думаем, думаете, "
-                "вижу, видишь, видит, видим, видите, видел, "
-                "слышу, слышишь, слышит, слышим, слышите, слышал, "
-                "иду, идёшь, идёт, идём, идёте, шёл, пошёл, "
-                "бегу, бежишь, бежит, бежим, бежите, бежал, "
-                "стреляю, стреляешь, стреляет, стрельнул, "
-                "ищу, ищешь, ищет, ищем, ищете, нашёл, "
-                "жду, ждёшь, ждёт, ждём, ждёте, "
-
-                # ── Russian: conversational Q&A ──
-                "что скажешь, что думаешь, как думаешь, "
-                "куда идём, куда пойдём, где ты, где он, "
-                "когда начнём, когда пойдём, сколько, "
-                "почему, зачем, откуда, "
-                "да конечно, не знаю, может быть, наверное, "
-                "ладно, хорошо, окей, ага, точно, именно, "
-
-                # ── Russian: Tarkov gameplay ──
-                "го в рейд, рейд, рейды, зашли в рейд, "
-                "квест, квесты, задание, задания, миссия, "
-                "оружие, пушка, ствол, патроны, броня, рюкзак, "
-                "экстракт, выход, точка выхода, вышел, "
-                "хедшот, ваншот, убил, убили, умер, "
-                "опасно, осторожно, враг, противник, противники, "
-                "скав, скавы, пэмэсэ, юсек, бэар, "
-                "лут, лутаю, залутал, что нашёл, "
-                "тайник, рынок, барахолка, "
-                "убежище, биткоин ферма, "
-                "вайп, после вайпа, новый вайп, "
-
-                # ── Russian: Tarkov maps & bosses ──
-                "Таможня, Завод, Развязка, Берег, Резерв, "
-                "Лаборатория, Лабы, Улицы, Маяк, Эпицентр, "
-                "Решала, Килла, Штурман, Тагилла, Глухарь, Кабан, "
-                "Прапор, Терапевт, Лыжник, Миротворец, Механик, Барахольщик, Егерь, "
-
-                # ── Russian: Tarkov community slang ──
-                "чад, крыса, кемпер, задрот, "
-                "мета, билд мета, шмот, экип, "
-                "красава, молодец, круто, жёстко, мощно, "
-                "скилл ишью, лаки, читер, хакер, подозрительно, "
-                "заберём, забрали, вынесли, затащили, "
-
-                # ── Russian: Twitch & streaming ──
-                "стрим, на стриме, в эфире, лайв, "
-                "чат, в чате, пишите в чат, "
-                "саб, подписка, фоллов, фолловер, "
-                "донат, донаты, рейд на стрим, "
-                "клип, эмоут, эмоуты, "
-                "модератор, бан, таймаут"
+                # ── Russian greetings (brief — avoids detection bias) ──
+                "Привет, здарова, как дела, спасибо, "
+                "давай, погнали, братан, го в рейд"
             )
 
             segments, info = model.transcribe(

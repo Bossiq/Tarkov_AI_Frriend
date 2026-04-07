@@ -2,8 +2,7 @@
 Unit tests for PMC Overwatch — pure-function logic.
 
 Run with:
-    cd c:\\Users\\maria\\.gemini\\antigravity\\scratch\\Tarkov_AI_Frriend
-    .\\venv\\Scripts\\python.exe -m pytest tests/test_units.py -v
+    python -m pytest tests/test_units.py -v
 
 Tests cover:
   • Expression detection (emotion classification from text)

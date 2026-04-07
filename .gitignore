@@ -11,6 +11,9 @@ build/
 
 # ── Private project files (not for public GitHub) ────────────────────
 PROJECT_KNOWLEDGE.md
+CLAUDE.md
+.claude/
+.claudeignore
 
 # ── Virtual environments ──────────────────────────────────────────────
 venv/

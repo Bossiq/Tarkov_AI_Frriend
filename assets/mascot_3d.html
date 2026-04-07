@@ -672,6 +672,78 @@ function idleSmokePuff(t) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
+// IDLE MICRO-ANIMATIONS — subtle life when standing still
+// ═══════════════════════════════════════════════════════════════════
+let lastIdleFidget = 0;
+const IDLE_FIDGET_INTERVAL = 8; // seconds between fidgets
+function idleMicroAnimations(t) {
+  if (state.isWalking || state.mode === 'speaking') return;
+  if (t - lastIdleFidget < IDLE_FIDGET_INTERVAL) return;
+  lastIdleFidget = t;
+
+  // Breathing: gentle Y bob
+  const breathY = Math.sin(t * 1.5) * 0.015;
+  characterGroup.position.y = CONFIG.groundY + breathY;
+
+  // Random fidgets when idle (20% chance each interval)
+  if (state.mode === 'idle' && Math.random() < 0.2) {
+    const fidgets = ['think', 'shrug', 'wave'];
+    const pick = fidgets[Math.floor(Math.random() * fidgets.length)];
+    if (actions[pick]) {
+      playAnim(pick, 0.4, false);
+      spawnSmoke(2, state.x, characterGroup.position.y + 1.0);
+    }
+  }
+
+  // Weight shift: subtle X sway when idle
+  if (state.mode === 'idle' || state.mode === 'listening') {
+    const sway = Math.sin(t * 0.8) * 0.02;
+    characterGroup.position.x = state.x + sway;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// DANGER-DRIVEN BEHAVIOR
+// ═══════════════════════════════════════════════════════════════════
+let currentDanger = 'none';
+function updateDangerBehavior(t) {
+  if (currentDanger === 'high') {
+    // Erratic movement in combat — faster, more nervous
+    glowLight.color.setHex(0xff4444); // red glow
+    if (Math.random() < 0.01) {
+      spawnSmoke(4, state.x, characterGroup.position.y + 0.5);
+    }
+  } else if (currentDanger === 'medium') {
+    glowLight.color.setHex(0xffaa00); // orange glow
+  } else {
+    glowLight.color.setHex(0x66bb6a); // normal green glow
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// ANIMATION MACROS — play a sequence of animations
+// ═══════════════════════════════════════════════════════════════════
+let macroQueue = [];
+let macroPlaying = false;
+function playMacro(animations) {
+  macroQueue = [...animations];
+  macroPlaying = true;
+  playNextMacroStep();
+}
+
+function playNextMacroStep() {
+  if (macroQueue.length === 0) {
+    macroPlaying = false;
+    playAnim('idle', 0.4, true);
+    return;
+  }
+  const next = macroQueue.shift();
+  triggerAnimation(next);
+  // Wait for animation to roughly finish before next step
+  setTimeout(playNextMacroStep, 2500);
+}
+
+// ═══════════════════════════════════════════════════════════════════
 // MOVEMENT SYSTEM
 // ═══════════════════════════════════════════════════════════════════
 function updateMovement() {
@@ -813,6 +885,19 @@ function handleServerMessage(msg) {
       break;
     case 'navigate':
       navigateTo(msg.value);
+      break;
+    case 'danger':
+      currentDanger = msg.value;
+      break;
+    case 'macro':
+      if (Array.isArray(msg.value)) playMacro(msg.value);
+      break;
+    case 'stats':
+      // Stats available for potential HUD display
+      if (msg.value) state.stats = msg.value;
+      break;
+    case 'personality':
+      state.personality = msg.value;
       break;
   }
 }
@@ -960,6 +1045,8 @@ function gameLoop() {
   updateGlow(t);
   updateParticles(dt);
   idleSmokePuff(t);
+  idleMicroAnimations(t);
+  updateDangerBehavior(t);
   autonomousMovement();
   positionUIElements();
 

@@ -1,19 +1,26 @@
 """
-AI Brain -- triple-engine LLM for PMC Overwatch.
+AI Brain -- dual-engine LLM for PMC Overwatch.
 
-Engines (in priority order):
+Text engines (in priority order):
   1. Groq cloud API  (250+ tok/s, free tier)
-  2. Google Gemini   (1500 req/day free, smart)
-  3. Ollama local    (offline fallback)
+  2. Ollama local    (offline fallback)
+
+Vision engine (screen analysis only):
+  * Google Gemini 2.0 Flash (1500 req/day free tier)
 
 Features:
-  * Automatic failover chain: Groq -> Gemini -> Ollama
+  * Automatic failover chain: Groq -> Ollama
   * Context compression (summarize old messages instead of dropping)
   * Streaming sentence-by-sentence for instant TTS
   * Sliding-window conversation memory
   * Retry logic with exponential backoff
   * Never returns comms error if any engine is reachable
-  * Screen vision analysis via Gemini Vision API
+  * Screen vision analysis via Gemini Vision API (cached, budget-aware)
+  * Personality modes (tactical / hype / comedy)
+  * Death tracking with escalating roast reactions
+  * Danger-intensity-aware reactions (low / medium / high)
+  * Vision confidence scoring (menu vs gameplay filtering)
+  * Stream recap generation (end-of-session summary)
 """
 
 import json
@@ -46,41 +53,112 @@ _MAX_RETRIES = 5
 _RETRY_BASE_DELAY = 1.0
 _COMPRESS_THRESHOLD = 8  # compress when memory exceeds this many messages
 
+# -- Personality Modes ---------------------------------------------------------
+_PERSONALITY_MODES = {
+    "hype": (
+        "Your personality mode is HYPE MAN. You are the ultimate energy machine. "
+        "Every kill is legendary, every loot find is god-tier, every play is insane. "
+        "Use high-energy language constantly. Get LOUD with your words. "
+        "Hype up everything the streamer does. You live for the clutch moments."
+    ),
+    "tactical": (
+        "Your personality mode is TACTICAL. You are a calm, focused operator. "
+        "Give precise callouts and actionable intel. Short, crisp sentences. "
+        "Think military radio comms. No hype unless a genuinely impressive play happens. "
+        "Focus on positioning, timing, ammo counts, and threat assessment."
+    ),
+    "comedy": (
+        "Your personality mode is COMEDY. You are a sarcastic, roast-heavy comedian. "
+        "Make fun of bad plays (lovingly). Drop hot takes. Be witty and irreverent. "
+        "Reference memes and gaming culture. Deadpan delivery. "
+        "If the streamer dies, absolutely roast them. If they clutch, act shocked."
+    ),
+}
+
+# -- Death Roast System --------------------------------------------------------
+_DEATH_ROAST_TIERS = {
+    # death_count_threshold: (tone_label, prompt_fragment)
+    1: ("encouraging", "The streamer just died. Be encouraging — shake it off, next raid."),
+    3: ("light_tease", "The streamer died again (death #{count}). Light teasing — 'we go again' energy."),
+    5: ("concerned", "Death #{count} this stream. Start showing genuine concern. Maybe suggest a break or a map change."),
+    7: ("roasting", "Death #{count}. Time to roast. Lovingly question their gaming skills. Be funny, not mean."),
+    10: ("full_roast", "Death #{count} this stream! Full roast mode. They are feeding. Comedy gold. Be savage but keep it fun."),
+    15: ("legendary", "Death #{count}! This is legendary bad. Suggest they might want to play a different game. Peak comedy."),
+}
+
+# -- Vision Reaction Prompts by Danger Level -----------------------------------
+_VISION_REACT_BY_DANGER = {
+    DangerLevel.LOW: (
+        "You are watching an Escape from Tarkov stream. The player is in a calm moment "
+        "(looting, healing, or moving safely). Give a chill, casual observation in 1-2 "
+        "SHORT sentences. Be relaxed. No urgency. Maybe comment on loot quality or "
+        "suggest what to do next. Never use markdown."
+    ),
+    DangerLevel.MEDIUM: (
+        "You are watching a Tarkov stream. Something suspicious is happening — enemy "
+        "spotted or danger nearby. React with ALERT energy in 1-2 SHORT sentences. "
+        "Warn the streamer. Be tense but controlled. Like a spotter calling out contacts. "
+        "Never use markdown."
+    ),
+    DangerLevel.HIGH: (
+        "You are watching a Tarkov stream. ACTIVE COMBAT or immediate danger! React with "
+        "URGENT, PANICKED energy in 1-2 SHORT sentences. Scream about the action. "
+        "Hype the chaos. If they are getting shot at, react like it is happening to you. "
+        "Maximum intensity. Never use markdown."
+    ),
+}
+
 from tarkov_data import QUEST_REFERENCE, TWITCH_REFERENCE  # noqa: E402
 from tarkov_updater import get_live_data  # noqa: E402
 from expression_engine import (  # noqa: E402
     detect_expression, Emotion, LLM_EXPRESSION_PROMPT, LLM_GESTURE_PROMPT,
+    assess_danger, DangerLevel,
 )
 
 _SYSTEM_CORE = (
+    "<persona>\n"
     "You are a female PMC Operator and Tarkov veteran who co-hosts a Twitch stream. "
     "You are the streamer's hype partner and entertainment sidekick. "
-    "Your vibe is ENERGETIC, fun, and a little chaotic, like a best friend "
-    "on a late-night Discord call who is way too into Tarkov.\n\n"
-    "PERSONALITY:\n"
-    "- Talk like you are on stream. Casual, punchy, no fluff.\n"
-    "- Use short sentences. Be snappy. Hit hard with your words.\n"
-    "- Get HYPED about plays, loot, and kills. React like you are watching live.\n"
-    "- Tease the streamer, crack jokes, drop hot takes.\n"
-    "- Keep it to 2-4 sentences. Stream talk is fast. Do not ramble.\n"
-    "- When giving Tarkov advice, be direct and confident. No hedging.\n\n"
-    "NEVER DO THIS:\n"
+    "Your vibe is ENERGETIC, fun, and a little chaotic — like a best friend "
+    "on a late-night Discord call who is way too into Tarkov.\n"
+    "Talk like you are on stream. Casual, punchy, no fluff. "
+    "Use short sentences. Be snappy. Hit hard with your words. "
+    "Get HYPED about plays, loot, and kills. React like you are watching live. "
+    "Tease the streamer, crack jokes, drop hot takes. "
+    "Keep it to 2-4 sentences. Stream talk is fast. Do not ramble. "
+    "When giving Tarkov advice, be direct and confident. No hedging.\n"
+    "</persona>\n\n"
+
+    "<rules>\n"
+    "HARD RULES — never violate these:\n"
     "- Never use markdown, lists, emoji, asterisks, or formatting.\n"
     "- Never say you are an AI, language model, or assistant.\n"
     "- Never use abbreviations like btw, imo, tbh, idk, ngl, afk, lol, lmao. "
-    "Always write full words.\n\n"
-    "CRITICAL LANGUAGE RULES:\n"
-    "- The user's message may begin with [LANG:xx] (e.g. [LANG:en], [LANG:ro], [LANG:ru]). "
+    "Always write full words.\n"
+    "- ALWAYS finish your complete thought. Never stop mid-sentence.\n"
+    "</rules>\n\n"
+
+    "<language>\n"
+    "The user's message may begin with [LANG:xx] (e.g. [LANG:en], [LANG:ro], [LANG:ru]). "
     "This is the DETECTED SPOKEN LANGUAGE. Always reply in that language.\n"
-    "- If no [LANG:xx] tag, detect the language from the text.\n"
-    "- You speak: English, Russian, Romanian.\n"
-    "- NEVER MIX LANGUAGES IN ONE RESPONSE. Every word in the same language.\n"
-    "- If user speaks Russian → reply fully in Russian. "
-    "Use natural slang: 'братан', 'чел', 'норм', 'кайф'.\n"
-    "- If user speaks Romanian → reply fully in Romanian.\n"
-    "- ALWAYS finish your complete thought. Never stop mid-sentence.\n\n"
+    "If no [LANG:xx] tag, detect the language from the text.\n"
+    "You speak: English, Russian, Romanian.\n"
+    "NEVER MIX LANGUAGES IN ONE RESPONSE. Every word in the same language.\n"
+    "If user speaks Russian, reply fully in Russian. "
+    "Use natural slang: братан, чел, норм, кайф.\n"
+    "If user speaks Romanian, reply fully in Romanian.\n"
+    "</language>\n\n"
+
     + LLM_EXPRESSION_PROMPT
     + LLM_GESTURE_PROMPT
+    + "<anti_cheat>\n"
+    "You are a STREAM OVERLAY companion only. You do NOT interact with the game process, "
+    "read game memory, inject code, or modify any files. You observe the screen using "
+    "standard OS screenshot APIs (identical to OBS Display Capture). You provide "
+    "entertainment commentary only — never give aiming assistance, ESP information, "
+    "wallhack-like callouts, or any gameplay advantage. You are a co-host, not a cheat. "
+    "If asked about enemy positions you cannot clearly see on screen, say you do not know.\n"
+    "</anti_cheat>\n"
 )
 
 # Quest keywords that trigger quest data injection
@@ -162,11 +240,13 @@ def _parse_cooldown_seconds(exc: Exception) -> float:
 
 
 class Brain:
-    """Triple-engine LLM: Groq -> Gemini -> Ollama.
+    """Dual-engine LLM: Groq -> Ollama, with Gemini vision.
 
-    Auto-failover chain: if the current engine fails (rate-limit,
-    connection error), instantly tries the next engine in the chain.
-    Never returns 'comms error' if any engine is reachable.
+    Text chain: Groq cloud (primary) → Ollama local (fallback).
+    Vision: Gemini 2.0 Flash (screen analysis only, budget-controlled).
+    Auto-failover: if the current engine fails (rate-limit, connection
+    error), instantly tries the next engine. Never returns 'comms error'
+    if any engine is reachable.
     """
 
     # Engine priority order
@@ -181,10 +261,15 @@ class Brain:
         self._repeat_penalty = _DEFAULT_REPEAT_PENALTY
         self._num_ctx = int(os.getenv("OLLAMA_NUM_CTX", str(_DEFAULT_NUM_CTX)))
         self._lock = threading.Lock()
+        self._memory_lock = threading.Lock()  # protects _memory compound operations
+
+        # Save debouncing — avoid writing to disk on every single message
+        self._last_save_time: float = 0.0
+        self._save_interval: float = 5.0  # save at most every 5 seconds
+        self._save_pending: bool = False
 
         # Conversation memory -- sliding window
         self._memory: deque[dict] = deque(maxlen=_MAX_MEMORY * 2)
-        self._rate_limit_until: float = 0.0
 
         # Persistent memory file
         self._memory_file = os.path.join(
@@ -265,8 +350,21 @@ class Brain:
         logger.info("Brain active: %s (%s) | engines: %s",
                      self._engine, self._model, " -> ".join(available))
 
+        # -- Personality mode --
+        self._personality_mode: str = os.getenv("PERSONALITY_MODE", "hype")
+        logger.info("Personality mode: %s", self._personality_mode)
+
+        # -- Death tracking --
+        self._death_count: int = 0
+        self._kill_count: int = 0
+        self._stream_start: float = time.monotonic()
+        self._session_highlights: list[str] = []  # notable moments for recap
+
+        # -- Vision danger tracking --
+        self._last_danger_level: DangerLevel = DangerLevel.NONE
+
         # Vision cache (see __init_vision_cache for fields)
-        self.__init_vision_cache()
+        self._init_vision_cache()
 
         # Pre-fetch live Tarkov data on startup (non-blocking cache)
         self._live_data: str = ""
@@ -287,6 +385,7 @@ class Brain:
         return self._live_data
 
     def _get_model_for_engine(self, engine: str) -> str:
+        """Return the configured model name for a given engine."""
         return {"groq": self._groq_model, "gemini": self._gemini_model,
                 "ollama": self._ollama_model}.get(engine, "")
 
@@ -382,32 +481,37 @@ class Brain:
 
     # -- Context compression ---------------------------------------------------
     def _maybe_compress_memory(self) -> None:
-        """If memory is too large, compress older messages into a summary."""
-        if len(self._memory) < _COMPRESS_THRESHOLD:
-            return
+        """If memory is too large, compress older messages into a summary.
 
-        # Take the oldest half of messages for compression
-        half = len(self._memory) // 2
-        old_msgs = list(self._memory)[:half]
+        Uses _memory_lock to protect the multi-step read-modify-write from
+        concurrent _remember() or clear_memory() calls on other threads.
+        """
+        with self._memory_lock:
+            if len(self._memory) < _COMPRESS_THRESHOLD:
+                return
 
-        # Build a simple summary from the old messages
-        summary_parts = []
-        for msg in old_msgs:
-            role = msg["role"]
-            content = msg["content"]
-            if role == "user":
-                summary_parts.append(f"User asked: {content[:100]}")
-            else:
-                summary_parts.append(f"AI replied: {content[:100]}")
+            # Take the oldest half of messages for compression
+            half = len(self._memory) // 2
+            old_msgs = list(self._memory)[:half]
 
-        summary = "[Earlier conversation summary: " + " | ".join(summary_parts) + "]"
+            # Build a simple summary from the old messages
+            summary_parts = []
+            for msg in old_msgs:
+                role = msg["role"]
+                content = msg["content"]
+                if role == "user":
+                    summary_parts.append(f"User asked: {content[:100]}")
+                else:
+                    summary_parts.append(f"AI replied: {content[:100]}")
 
-        # Remove old messages and prepend summary
-        for _ in range(half):
-            self._memory.popleft()
-        self._memory.appendleft({"role": "system", "content": summary})
-        logger.info("Memory compressed: %d messages -> summary + %d recent",
-                    half, len(self._memory) - 1)
+            summary = "[Earlier conversation summary: " + " | ".join(summary_parts) + "]"
+
+            # Remove old messages and prepend summary
+            for _ in range(half):
+                self._memory.popleft()
+            self._memory.appendleft({"role": "system", "content": summary})
+            logger.info("Memory compressed: %d messages -> summary + %d recent",
+                        half, len(self._memory) - 1)
 
     # -- Message helpers -------------------------------------------------------
     def _build_messages(self, user_prompt: str) -> list[dict]:
@@ -417,65 +521,213 @@ class Brain:
 
         system = _SYSTEM_CORE
 
-        # Inject quest reference when quest-related topics detected
+        # ── Personality mode injection ────────────────────────────────
+        mode_prompt = _PERSONALITY_MODES.get(self._personality_mode)
+        if mode_prompt:
+            system += f"\n\n<personality_mode>\n{mode_prompt}\n</personality_mode>"
+
+        # ── Death context injection ───────────────────────────────────
+        if self._death_count > 0:
+            system += (
+                f"\n\n<stream_stats>\n"
+                f"Deaths this stream: {self._death_count}. "
+                f"Kills this stream: {self._kill_count}.\n"
+                f"</stream_stats>"
+            )
+
+        # ── Contextual data injection (XML-tagged for LLM clarity) ─────
+        # Each block is wrapped in XML tags so the LLM can cleanly
+        # distinguish system instructions from injected reference data.
+
         if _QUEST_KEYWORDS.search(user_prompt):
-            system += "\n\nUSE THIS REFERENCE for accurate Tarkov info:\n" + QUEST_REFERENCE
+            system += (
+                "\n\n<quest_reference>\n"
+                "USE THIS DATA for accurate Tarkov quest/trader info:\n"
+                + QUEST_REFERENCE
+                + "\n</quest_reference>"
+            )
 
-        # Inject Twitch context when streaming topics detected
         if _TWITCH_KEYWORDS.search(user_prompt):
-            system += "\n" + TWITCH_REFERENCE
+            system += (
+                "\n\n<twitch_context>\n"
+                + TWITCH_REFERENCE
+                + "\n</twitch_context>"
+            )
 
-        # Inject live data when meta/patch/ammo topics detected
         if _META_KEYWORDS.search(user_prompt) or _QUEST_KEYWORDS.search(user_prompt):
             live = self._get_live_tarkov_data()
             if live:
-                system += "\n\nLIVE DATA (auto-updated from tarkov.dev):\n" + live
+                system += (
+                    "\n\n<live_game_data source=\"tarkov.dev\">\n"
+                    + live
+                    + "\n</live_game_data>"
+                )
+
+        # ── Screen vision context (from cached Gemini analysis) ────────
+        # Injected as system-level context so the LLM always knows what
+        # the player is doing on screen, without main.py needing to
+        # append it to the user prompt.
+        screen_ctx = self.cached_screen_context
+        if screen_ctx:
+            system += (
+                "\n\n<screen_context>\n"
+                "What you can see on the player's screen right now:\n"
+                + screen_ctx
+                + "\n</screen_context>"
+            )
 
         messages = [{"role": "system", "content": system}]
-        messages.extend(self._memory)
+        with self._memory_lock:
+            messages.extend(self._memory)
         messages.append({"role": "user", "content": user_prompt})
         return messages
 
     def _remember(self, role: str, content: str) -> None:
         """Add a message to conversation memory and persist to disk."""
-        self._memory.append({"role": role, "content": content})
+        with self._memory_lock:
+            self._memory.append({"role": role, "content": content})
         self._save_memory()
 
     def _load_memory(self) -> None:
-        """Load conversation memory from disk (if available)."""
+        """Load conversation memory from disk (if available).
+
+        Uses _memory_lock for correctness, even though this is typically
+        called during __init__ before threads start.
+        """
         try:
             if os.path.exists(self._memory_file):
                 with open(self._memory_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 if isinstance(data, list):
-                    self._memory.clear()
-                    for msg in data[-(_MAX_MEMORY * 2):]:
-                        if isinstance(msg, dict) and "role" in msg and "content" in msg:
-                            self._memory.append(msg)
+                    with self._memory_lock:
+                        self._memory.clear()
+                        for msg in data[-(_MAX_MEMORY * 2):]:
+                            if isinstance(msg, dict) and "role" in msg and "content" in msg:
+                                self._memory.append(msg)
                     if self._memory:
                         logger.info("Loaded %d messages from persistent memory", len(self._memory))
         except Exception:
             logger.debug("Could not load persistent memory (starting fresh)", exc_info=True)
 
     def _save_memory(self) -> None:
-        """Save conversation memory to disk."""
+        """Save conversation memory to disk (debounced).
+
+        Writes at most once per ``_save_interval`` seconds to avoid
+        unnecessary I/O on the streaming hot path. A pending save is
+        flushed when the next interval elapses.
+        """
+        now = time.monotonic()
+        if now - self._last_save_time < self._save_interval:
+            self._save_pending = True
+            return  # too soon — save will happen on next call past interval
+        self._flush_memory_to_disk()
+
+    def _flush_memory_to_disk(self) -> None:
+        """Immediately write memory to disk (called by debounce + shutdown)."""
         try:
             os.makedirs(os.path.dirname(self._memory_file), exist_ok=True)
+            with self._memory_lock:
+                snapshot = list(self._memory)
             with open(self._memory_file, "w", encoding="utf-8") as f:
-                json.dump(list(self._memory), f, ensure_ascii=False, indent=2)
+                json.dump(snapshot, f, ensure_ascii=False, indent=2)
+            self._last_save_time = time.monotonic()
+            self._save_pending = False
         except Exception:
             logger.debug("Could not save persistent memory", exc_info=True)
 
     def clear_memory(self) -> None:
         """Clear conversation memory (both in-memory and on disk)."""
-        self._memory.clear()
+        with self._memory_lock:
+            self._memory.clear()
         try:
             if os.path.exists(self._memory_file):
                 os.remove(self._memory_file)
                 logger.info("Persistent memory file deleted")
         except Exception:
             logger.debug("Could not delete memory file", exc_info=True)
+        self._flush_memory_to_disk()  # ensure cleared state is persisted
         logger.info("Conversation memory cleared")
+
+    # ── Personality & Death Tracking API ─────────────────────────────
+
+    @property
+    def personality_mode(self) -> str:
+        """Current personality mode (hype / tactical / comedy)."""
+        return self._personality_mode
+
+    def set_personality_mode(self, mode: str) -> bool:
+        """Switch personality mode. Returns True if valid mode."""
+        mode = mode.lower().strip()
+        if mode not in _PERSONALITY_MODES:
+            return False
+        self._personality_mode = mode
+        logger.info("Personality mode switched to: %s", mode)
+        return True
+
+    def record_death(self) -> str:
+        """Record a player death and return an escalating reaction prompt."""
+        self._death_count += 1
+        self._session_highlights.append(
+            f"Death #{self._death_count} at {self._format_session_time()}"
+        )
+        logger.info("Death recorded: #%d this stream", self._death_count)
+
+        # Find the appropriate roast tier
+        prompt = ""
+        for threshold in sorted(_DEATH_ROAST_TIERS.keys(), reverse=True):
+            if self._death_count >= threshold:
+                _, prompt_template = _DEATH_ROAST_TIERS[threshold]
+                prompt = prompt_template.replace("{count}", str(self._death_count))
+                break
+        return prompt
+
+    def record_kill(self) -> None:
+        """Record a player kill."""
+        self._kill_count += 1
+        self._session_highlights.append(
+            f"Kill #{self._kill_count} at {self._format_session_time()}"
+        )
+        logger.info("Kill recorded: #%d this stream", self._kill_count)
+
+    @property
+    def death_count(self) -> int:
+        """Current death count this stream."""
+        return self._death_count
+
+    @property
+    def kill_count(self) -> int:
+        """Current kill count this stream."""
+        return self._kill_count
+
+    @property
+    def danger_level(self) -> DangerLevel:
+        """Last assessed danger level from vision."""
+        return self._last_danger_level
+
+    def _format_session_time(self) -> str:
+        """Format elapsed time since stream start."""
+        elapsed = int(time.monotonic() - self._stream_start)
+        hours, remainder = divmod(elapsed, 3600)
+        minutes, _ = divmod(remainder, 60)
+        if hours:
+            return f"{hours}h{minutes}m"
+        return f"{minutes}m"
+
+    def generate_stream_recap(self) -> str:
+        """Generate an end-of-stream recap prompt for the LLM."""
+        elapsed = self._format_session_time()
+        recap_prompt = (
+            f"The stream is ending after {elapsed}. Generate a fun, hype stream recap. "
+            f"Deaths: {self._death_count}. Kills: {self._kill_count}. "
+        )
+        if self._session_highlights:
+            recent = self._session_highlights[-10:]  # last 10 highlights
+            recap_prompt += "Notable moments: " + "; ".join(recent) + ". "
+        recap_prompt += (
+            "Summarize the session like a sports commentator doing post-game analysis. "
+            "Thank the viewers. Hype up the next stream. Keep it to 4-6 sentences."
+        )
+        return recap_prompt
 
     # ── Public API ────────────────────────────────────────────────────
     def generate_response(
@@ -504,16 +756,6 @@ class Brain:
         retry_count = 0
 
         while retry_count <= _MAX_RETRIES:
-            use_fallback = (
-                self._engine == "groq"
-                and self._model != _GROQ_FALLBACK_MODEL
-                and time.time() < self._rate_limit_until
-            )
-            if use_fallback:
-                logger.info("Primary model rate-limited, using Groq fallback")
-                old_model = self._model
-                self._model = _GROQ_FALLBACK_MODEL
-
             try:
                 logger.info("Streaming from %s (%s)", self._engine, self._model)
                 messages = self._build_messages(text_prompt)
@@ -562,16 +804,10 @@ class Brain:
 
                 if full_response.strip():
                     self._remember("assistant", full_response.strip())
-                if use_fallback:
-                    self._model = old_model
                 return
 
             except Exception as exc:
                 logger.warning("%s error: %s", self._engine, exc)
-
-                # Restore model name if we were using fallback
-                if use_fallback:
-                    self._model = old_model
 
                 # -- Cloud engines get 1 retry on transient errors --
                 # Rate-limit errors (429) should failover immediately,
@@ -610,10 +846,6 @@ class Brain:
                 buffer = ""
                 full_response = ""
 
-    def clear_memory(self) -> None:
-        """Clear conversation history."""
-        self._memory.clear()
-        logger.info("Conversation memory cleared")
 
     # ── Screen Vision — Cached Context System ─────────────────────────
     # Gemini Vision is used ONLY for screen analysis (never for text).
@@ -640,11 +872,12 @@ class Brain:
         "If combat/danger, react with urgency!"
     )
 
-    def __init_vision_cache(self):
+    def _init_vision_cache(self) -> None:
         """Initialize the vision cache (called from __init__)."""
         self._vision_cache: str = ""  # cached screen description
         self._vision_cache_time: float = 0.0
         self._vision_lock = threading.Lock()
+        self._vision_react_turn: bool = False  # alternates to halve reaction API calls
 
     @property
     def cached_screen_context(self) -> str:
@@ -700,29 +933,53 @@ class Brain:
 
             logger.info("Vision cache updated: %s", description[:80] if description else "(empty)")
 
-            # 2. Check if this is reaction-worthy (combat, danger, big loot)
-            #    Only do this every other call to save rate limit
-            react_keywords = ("combat", "fight", "shoot", "dead", "kill",
-                              "blood", "grenade", "enemy", "boss", "loot",
-                              "extract", "injured", "heavy bleed")
-            should_react = any(kw in description.lower() for kw in react_keywords)
+            # 2. Assess danger level from description
+            danger = assess_danger(description)
+            self._last_danger_level = danger
 
-            if should_react:
-                react_response = self._gemini_client.models.generate_content(
-                    model=self._gemini_model,
-                    contents=[{
-                        "role": "user", 
-                        "parts": [
-                            {"text": self._VISION_REACT_PROMPT},
-                            image_part,
-                        ],
-                    }],
-                    config={"max_output_tokens": 60, "temperature": 0.8},
-                )
-                reaction = react_response.text.strip() if react_response.text else ""
-                if reaction and len(reaction) > 5:
-                    logger.info("Vision reaction: %s", reaction[:80])
-                    return reaction
+            # Vision confidence: skip reactions for menus/loading screens
+            desc_lower = description.lower()
+            if any(skip in desc_lower for skip in ("menu", "loading", "lobby", "stash", "hideout")):
+                logger.debug("Vision: low-confidence frame (menu/loading), skipping reaction")
+                return None
+
+            # Only react if danger is LOW or higher (something is happening)
+            if danger == DangerLevel.NONE:
+                return None
+
+            # Alternate: skip reaction every other qualifying cycle to stay
+            # within 1500 RPD Gemini budget.
+            self._vision_react_turn = not self._vision_react_turn
+            if not self._vision_react_turn and danger != DangerLevel.HIGH:
+                return None  # skip this cycle (but never skip HIGH danger)
+
+            # Select reaction prompt based on danger level
+            react_prompt = _VISION_REACT_BY_DANGER.get(
+                danger, self._VISION_REACT_PROMPT
+            )
+
+            # Adjust temperature by danger: calm=creative, combat=focused
+            react_temp = {
+                DangerLevel.LOW: 0.9,
+                DangerLevel.MEDIUM: 0.7,
+                DangerLevel.HIGH: 0.6,
+            }.get(danger, 0.8)
+
+            react_response = self._gemini_client.models.generate_content(
+                model=self._gemini_model,
+                contents=[{
+                    "role": "user",
+                    "parts": [
+                        {"text": react_prompt},
+                        image_part,
+                    ],
+                }],
+                config={"max_output_tokens": 60, "temperature": react_temp},
+            )
+            reaction = react_response.text.strip() if react_response.text else ""
+            if reaction and len(reaction) > 5:
+                logger.info("Vision reaction [%s]: %s", danger.value, reaction[:80])
+                return reaction
 
             return None
 
@@ -731,11 +988,13 @@ class Brain:
             return None
 
     def get_screen_context(self, frame_path: Optional[str] = None) -> str:
-        """Get the cached screen context string to inject into prompts.
-        
-        Returns a string like '[Screen: Player looting in Dorms, Customs]'
-        or empty string if no cache available. Does NOT call any API —
-        just reads the cache.
+        """Get the cached screen context string for external callers.
+
+        NOTE: Screen context is now automatically injected by _build_messages()
+        into the system prompt using XML tags. This method is kept for backward
+        compatibility and external callers (e.g., direct Brain tests).
+
+        Returns empty string if no cache available. Does NOT call any API.
         """
         ctx = self.cached_screen_context
         if ctx:
@@ -748,6 +1007,8 @@ class Brain:
         if self._engine == "groq":
             yield from self._stream_groq(messages)
         elif self._engine == "gemini":
+            # Gemini is vision-only in current config, but streaming path
+            # is kept functional for potential future re-addition to text chain.
             yield from self._stream_gemini(messages)
         else:
             yield from self._stream_ollama(messages)

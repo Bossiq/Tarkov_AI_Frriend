@@ -2,8 +2,7 @@
 Stress tests for PMC Overwatch Phase 2 features.
 
 Run with:
-    cd c:\\Users\\maria\\.gemini\\antigravity\\scratch\\Tarkov_AI_Frriend
-    .\\venv\\Scripts\\python.exe -m pytest tests/test_stress.py -v
+    python -m pytest tests/test_stress.py -v
 
 Tests cover:
   • Screen capture: memory stability over 60s, thread cleanup

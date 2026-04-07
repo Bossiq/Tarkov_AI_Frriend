@@ -22,6 +22,10 @@ State messages (JSON over WebSocket):
   {"type": "navigate",  "value": "left"|"right"|"center"|"random"}
   {"type": "animation", "value": "dance"|"celebrate"|"die"|"sleep"|...}
   {"type": "subtitle",  "value": "text currently being spoken"}
+  {"type": "danger",    "value": "none"|"low"|"medium"|"high"}
+  {"type": "stats",     "value": {"deaths": N, "kills": N}}
+  {"type": "personality", "value": "hype"|"tactical"|"comedy"}
+  {"type": "macro",     "value": ["dance", "clap", "wave"]}
 
 SECURITY: only binds to 127.0.0.1 — NOT exposed to the internet.
 """
@@ -134,6 +138,9 @@ class MascotServer:
         self._server: Optional[uvicorn.Server] = None
         self._start_time = time.monotonic()
 
+        # Brain reference for personality/recap API
+        self._brain = None
+
         # Connected WebSocket clients
         self._clients: list[WebSocket] = []
         self._clients_lock = threading.Lock()
@@ -144,10 +151,17 @@ class MascotServer:
             "amplitude": 0.0,
             "emotion": "neutral",
             "subtitle": "",
+            "danger": "none",
+            "personality": "hype",
+            "stats": {"deaths": 0, "kills": 0},
         }
 
         # Asyncio loop for broadcast (set when server starts)
         self._loop: Optional[asyncio.AbstractEventLoop] = None
+
+    def set_brain(self, brain) -> None:
+        """Set a reference to the Brain instance for personality/recap API."""
+        self._brain = brain
 
     @property
     def available(self) -> bool:
@@ -228,6 +242,26 @@ class MascotServer:
     def send_navigate(self, direction: str) -> None:
         """Move the mascot to a position (left, right, center, random)."""
         self._broadcast({"type": "navigate", "value": direction})
+
+    def send_danger_level(self, level: str) -> None:
+        """Broadcast current danger level to mascot for behavior changes."""
+        self._state["danger"] = level
+        self._broadcast({"type": "danger", "value": level})
+
+    def send_stats(self, deaths: int, kills: int) -> None:
+        """Broadcast stream stats to dashboard/mascot."""
+        stats = {"deaths": deaths, "kills": kills}
+        self._state["stats"] = stats
+        self._broadcast({"type": "stats", "value": stats})
+
+    def send_personality(self, mode: str) -> None:
+        """Broadcast personality mode change."""
+        self._state["personality"] = mode
+        self._broadcast({"type": "personality", "value": mode})
+
+    def send_macro(self, animations: list[str]) -> None:
+        """Trigger an animation macro (sequence of animations)."""
+        self._broadcast({"type": "macro", "value": animations})
 
     def _broadcast(self, message: dict) -> None:
         """Broadcast a JSON message to all connected WebSocket clients."""
@@ -330,6 +364,12 @@ class MascotServer:
                             self.send_animation(msg.get("value", ""))
                         elif msg_type == "trigger_navigate":
                             self.send_navigate(msg.get("value", ""))
+                        elif msg_type == "trigger_macro":
+                            self.send_macro(msg.get("value", []))
+                        elif msg_type == "set_personality":
+                            mode = msg.get("value", "")
+                            if self._brain and self._brain.set_personality_mode(mode):
+                                self.send_personality(mode)
                     except json.JSONDecodeError:
                         pass
             except WebSocketDisconnect:
@@ -371,7 +411,7 @@ class MascotServer:
                 "uptime_human": _format_uptime(uptime),
                 "mascot_clients": len(self._clients),
                 "current_state": self._state,
-                "version": "0.29.0",
+                "version": "0.30.0",
             }
             if self._get_status:
                 try:
@@ -392,6 +432,28 @@ class MascotServer:
                         status_code=500,
                     )
             return {"status": "ok", "message": "No brain connected"}
+
+        @app.put("/api/personality")
+        async def set_personality(body: dict):
+            mode = body.get("mode", "")
+            if self._brain and self._brain.set_personality_mode(mode):
+                self.send_personality(mode)
+                return {"status": "ok", "mode": mode}
+            return JSONResponse(
+                {"status": "error", "message": f"Invalid mode: {mode}. Use: hype, tactical, comedy"},
+                status_code=400,
+            )
+
+        @app.get("/api/stream-stats")
+        async def stream_stats():
+            if self._brain:
+                return {
+                    "deaths": self._brain.death_count,
+                    "kills": self._brain.kill_count,
+                    "personality": self._brain.personality_mode,
+                    "danger": self._brain.danger_level.value,
+                }
+            return {"deaths": 0, "kills": 0, "personality": "hype", "danger": "none"}
 
         return app
 

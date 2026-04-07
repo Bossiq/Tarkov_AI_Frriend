@@ -5,18 +5,19 @@
 <h1 align="center">PMC Overwatch</h1>
 
 <p align="center">
-  <strong>Real-time AI voice companion for Escape from Tarkov streaming</strong><br/>
-  3D Animated Mascot • Groq LLM + Gemini Vision • Neural Voice • Twitch Integration<br/>
-  <sub>v0.29.0</sub>
+  <strong>AI-powered animated stream companion for Escape from Tarkov</strong><br/>
+  3D Mascot with Personality • Dual LLM + Gemini Vision • Neural Voice Pipeline • Twitch Chat<br/>
+  <sub>v0.30.0 &mdash; In Development</sub>
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white" alt="Python" />
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS-lightgrey?logo=windows" alt="Platform" />
   <img src="https://img.shields.io/badge/LLM-Groq%20%2B%20Ollama-FF6B35" alt="LLM" />
+  <img src="https://img.shields.io/badge/Vision-Gemini%202.0%20Flash-4285F4" alt="Vision" />
   <img src="https://img.shields.io/badge/TTS-edge--tts%20%2B%20Kokoro-22c55e" alt="TTS" />
   <img src="https://img.shields.io/badge/STT-Whisper%20%2B%20Groq-ef4444" alt="STT" />
-  <img src="https://img.shields.io/badge/VAD-Silero%20Neural-7c3aed" alt="VAD" />
+  <img src="https://img.shields.io/badge/anti--cheat-safe-brightgreen" alt="Anti-Cheat Safe" />
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="License" />
 </p>
 
@@ -24,15 +25,20 @@
 
 ## What Is This?
 
-PMC Overwatch is an **AI-powered voice companion** designed for Escape from Tarkov live-streaming on Twitch. It runs as a headless voice engine with a 3D animated mascot overlay for OBS — think of it as a virtual co-host that listens, talks back, reacts to gameplay, and interacts with Twitch chat.
+PMC Overwatch is an **animated AI companion** that lives on your screen while you stream Escape from Tarkov on Twitch. It sees your gameplay, reacts to what's happening, talks back in real-time, and interacts with your chat — all while being completely **anti-cheat safe**.
 
-**Key highlights:**
-- 🎙️ Speaks back in real-time with Microsoft Neural Voices (edge-tts)
-- 🧠 Dual-engine LLM with automatic failover (Groq → Ollama) + Gemini Vision for screen awareness
-- 🎮 Deep Tarkov knowledge: quests, maps, ammo tables, bosses, flee market prices
-- 🤖 3D animated mascot with Mixamo motion-captured animations in OBS
-- 🔊 Neural voice activity detection (Silero VAD) with barge-in support
-- 🌐 Trilingual: English, Russian, Romanian with auto-detection
+Think of it as a virtual co-host with its own personality, brain, and body.
+
+**What it does:**
+- **Sees your screen** via Gemini Vision and reacts to combat, looting, deaths, and extracts
+- **Talks back** with Microsoft Neural Voices in real-time (sentence-by-sentence streaming)
+- **Moves around** your screen autonomously — walks, ducks during combat, celebrates kills
+- **Has personality modes** — switch between Hype Man, Tactical Advisor, and Comedy mode
+- **Roasts your deaths** — escalating reactions from encouraging to full roast mode
+- **Responds to Twitch chat** — viewers can make it dance, move, and ask it questions
+- **Knows Tarkov** — quests, ammo tables, maps, bosses, flea market prices
+
+**Anti-cheat safe:** Screen capture uses DXGI (the same API OBS uses). No game memory reading, no packet inspection, no overlays injected into the game process. Fully BattlEye compliant.
 
 ---
 
@@ -43,9 +49,10 @@ PMC Overwatch is an **AI-powered voice companion** designed for Escape from Tark
                           │   OBS Browser Source      │
                           │   mascot_3d.html          │
                           │   Three.js + FBX + GLB    │
-                          │   3D Animated Mascot      │
+                          │   Idle Animations + Danger│
                           └────────────▲─────────────┘
-                                       │ WebSocket
+                                       │ WebSocket (emotion, animation,
+                                       │  danger, macro, personality)
 ┌──────────────────────────────────────┼────────────────────────────────┐
 │                              main.py │ (Headless Engine)              │
 │                                      │                                │
@@ -55,17 +62,24 @@ PMC Overwatch is an **AI-powered voice companion** designed for Escape from Tark
 │  │ Silero VAD   │   │ Groq ─────┤   └────────────────┘              │
 │  │ Whisper STT  │   │ Ollama ───┘                                    │
 │  │ Noise Reduce │   │               ┌────────────────┐              │
-│  └─────────────┘   │               │ voice_output    │              │
-│                     │ stream_       │ edge-tts (pri)  │              │
-│                     │ sentences() ─▶│ Kokoro  (bkup)  │              │
-│                     └────────────┘  │ Lip-sync amp    │              │
-│                                     └────────────────┘              │
+│  └─────────────┘   │ Personality   │ voice_output    │              │
+│                     │ Death Roasts  │ edge-tts (pri)  │              │
+│                     │ Danger Aware  │ Kokoro  (bkup)  │              │
+│                     │ Stream Recap  │ Lip-sync amp    │              │
+│                     └────────────┘  └────────────────┘              │
+│                                                                      │
 │  ┌──────────────┐   ┌─────────────┐  ┌──────────────┐              │
 │  │ video_capture │   │ expression  │  │ sound_effects│              │
-│  │ Screen(1 FPS)│   │ _engine     │  │ Tactical SFX │              │
-│  │ Gemini Vision│   │ 12 emotions │  └──────────────┘              │
-│  │ (cache/20s)  │   └─────────────┘                                  │
-│  └──────────────┘                                                    │
+│  │ DXGI Capture │   │ _engine     │  │ Kill chime   │              │
+│  │ Gemini Vision│   │ 12 emotions │  │ Death buzzer │              │
+│  │ (cache/20s)  │   │ DangerLevel │  │ Loot sparkle │              │
+│  └──────────────┘   └─────────────┘  │ Extract fanf.│              │
+│                                       └──────────────┘              │
+│  ┌──────────────┐   ┌─────────────┐                                  │
+│  │ twitch_bot   │   │ tarkov_data │                                  │
+│  │ 16 commands  │   │ + updater   │                                  │
+│  │ Cooldowns    │   │ GraphQL API │                                  │
+│  └──────────────┘   └─────────────┘                                  │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -90,26 +104,97 @@ PMC Overwatch is an **AI-powered voice companion** designed for Escape from Tark
 | **Ollama Local** | Text (fallback) | qwen2.5:3b | Offline emergency backup, auto-starts with app |
 | **Gemini** | Vision only | gemini-2.0-flash | Screen analysis every 20s, cached context injected into all prompts |
 
-Groq handles ALL text (chat + responses). Gemini is reserved exclusively for screen vision analysis (1,500 req/day free tier = 8 hours of streaming). Rate limits are tracked with cooldown timers. When Groq hits its limit, the system fails over to Ollama and auto-restores when the cooldown expires.
+Rate limits are tracked with cooldown timers. When Groq hits its limit, the system fails over to Ollama and auto-restores when the cooldown expires. Gemini is reserved exclusively for screen vision analysis (1,500 req/day free tier = 8 hours of streaming).
+
+### Personality System
+Three switchable personality modes that change how the AI speaks and reacts:
+
+| Mode | Style |
+|------|-------|
+| **Hype** | High-energy play-by-play. Screams about kills, gasps at close calls, maximum chat engagement |
+| **Tactical** | Serious military advisor. Callouts, warnings, strategic analysis |
+| **Comedy** | Sarcastic observer. Roasts gameplay, makes jokes, self-deprecating humor |
+
+Switch via Twitch chat (`!personality hype/tactical/comedy`) or the web dashboard.
+
+### Death Roast System
+The AI tracks deaths per stream and escalates its reactions:
+
+| Deaths | Tier | Reaction Style |
+|--------|------|---------------|
+| 1 | Supportive | "Shake it off, you got this" |
+| 3 | Concerned | "Okay maybe try a different approach?" |
+| 5 | Blunt | "That's becoming a pattern" |
+| 7 | Roasting | "At this point the scavs feel bad" |
+| 10 | Brutal | Full roast, no filter |
+| 15+ | Legendary | "Historic performance, truly unprecedented" |
+
+### Danger Awareness
+Vision analysis assigns a danger level (NONE / LOW / MEDIUM / HIGH) to each screen capture:
+
+- **LOW** — inventory management, quiet areas. Mascot is calm, occasional tips
+- **MEDIUM** — nearby movement, distant gunfire. Mascot gets alert, warns about threats
+- **HIGH** — active combat, grenades, bosses. Mascot ducks, urgent callouts, combat SFX
+
+The mascot's glow color changes with danger level, and combat particle effects appear during HIGH danger.
+
+### Sound Effects
+Contextual SFX triggered by game events detected through vision analysis:
+
+| Event | Sound | Cooldown |
+|-------|-------|----------|
+| **Kill confirmed** | Ascending triple chime (E5-G5-C6) | 2s |
+| **Death** | Descending three-note buzzer (G4-D4-G3) | 3s |
+| **Loot found** | Shimmering two-note sparkle (D6-F6) | 2s |
+| **Extract success** | Triumphant four-note fanfare (C5-E5-G5-C6) | 5s |
 
 ### 3D Mascot (OBS Overlay)
 | Feature | Description |
 |---------|-------------|
 | **Character** | Custom FBX model with Altyn helmet + gold RPK weapon |
-| **Animations** | 10 Mixamo FBX: idle, rifle_walk, crouch, wave, clap, think, shrug, dance |
+| **Animations** | 12 Mixamo animations: idle, walk, crouch, wave, clap, think, shrug, dance, salute, die, win |
 | **AI-Driven Gestures** | LLM uses `[gesture:NAME]` tags to trigger animations contextually |
-| **Voice-Reactive** | Green glow aura, amplitude-driven effects, mode indicators |
-| **Movement** | Autonomous walking + Twitch chat commands (!move, !dance, !wave) |
+| **Idle Micro-Animations** | Breathing bob, weight shifting, random fidgets (weapon adjust, foot tap) |
+| **Danger Reactions** | Glow color shifts (green→yellow→orange→red), combat particles at HIGH danger |
+| **Animation Macros** | Chain sequences: celebrate = dance→clap→wave. Custom via `!macro` |
+| **Autonomous Movement** | Walks every 12-20s + screen-driven movement (moves toward action) |
+| **Voice-Reactive** | Green glow aura, amplitude-driven effects |
 | **Debug Panel** | Press **D** for live RPK position/rotation/scale sliders |
 
-### Stream Integration
-| Feature | Description |
+### Twitch Integration
+| Command | Description |
 |---------|-------------|
-| **Twitch Chat Bot** | Responds to chat, accepts viewer commands |
-| **Twitch Commands** | `!move` `!dance` `!wave` `!clap` `!think` `!shrug` `!status` — with 10s per-user cooldown |
-| **Screen Vision** | Gemini analyzes gameplay every 20s, cached context injected into every AI prompt |
-| **Dashboard UI** | Web control panel at `localhost:8420` with real-time status |
-| **Tarkov Knowledge** | Quest database, ammo tables, map extracts, boss info, flea market |
+| `!hello` | Greeting |
+| `!move <dir>` | Move mascot (left/right/center/random) |
+| `!dance` | Trigger dance animation |
+| `!wave` | Trigger wave animation |
+| `!clap` | Trigger clap animation |
+| `!think` | Trigger thinking pose |
+| `!shrug` | Trigger shrug animation |
+| `!salute` | Trigger salute animation |
+| `!crouch` | Trigger crouch animation |
+| `!die` | Dramatic death animation |
+| `!win` | Victory pose |
+| `!ask <text>` | Ask the AI a question directly |
+| `!status` | Show AI engine status + uptime |
+| `!personality <mode>` | Switch personality (hype/tactical/comedy) |
+| `!deaths` | Show death/kill count and K/D ratio |
+| `!celebrate` | Trigger celebration macro (dance→clap→wave) |
+| `!macro <list>` | Custom animation sequence (e.g., `!macro dance,clap,wave`) |
+
+All commands have a 10-second per-user cooldown. Macros are capped at 5 animations.
+
+### Web Dashboard
+Control panel at `http://localhost:8420` with:
+- Real-time AI status, engine info, uptime
+- Personality mode selector (Hype / Tactical / Comedy)
+- Live stream stats (kills, deaths, K/D ratio, danger level)
+- Quick macro buttons (Celebrate, Confused, Tactical, Dramatic)
+- Emotion and animation triggers
+- Mascot movement controls
+
+### Stream Recap
+On shutdown, the AI generates a summary of the stream session including kills, deaths, K/D ratio, duration, and session highlights. Can be used as a clip-worthy sendoff.
 
 ---
 
@@ -119,11 +204,11 @@ Groq handles ALL text (chat + responses). Gemini is reserved exclusively for scr
 
 | Requirement | Required? | Notes |
 |-------------|-----------|-------|
-| **Python 3.10+** | ✅ Yes | [python.org/downloads](https://www.python.org/downloads/) |
-| **Microphone** | ✅ Yes | Any USB or built-in mic |
-| **Groq API Key** | 🟡 Recommended | Free at [console.groq.com](https://console.groq.com/keys) |
-| **Gemini API Key** | 🟡 Recommended | Free at [aistudio.google.com](https://aistudio.google.com/app/apikey) |
-| **Ollama** | 🔵 Optional | Auto-installs locally — [ollama.com](https://ollama.com) |
+| **Python 3.10+** | Yes | [python.org/downloads](https://www.python.org/downloads/) |
+| **Microphone** | Yes | Any USB or built-in mic |
+| **Groq API Key** | Recommended | Free at [console.groq.com](https://console.groq.com/keys) |
+| **Gemini API Key** | Recommended | Free at [aistudio.google.com](https://aistudio.google.com/app/apikey) |
+| **Ollama** | Optional | Auto-installs locally — [ollama.com](https://ollama.com) |
 
 ### Installation
 
@@ -148,7 +233,7 @@ cp .env.example .env
 python main.py
 ```
 
-The mascot overlay is served at **http://127.0.0.1:8420/mascot3d** — add this as an OBS Browser Source (1920×1080, transparent background).
+The mascot overlay is served at **http://127.0.0.1:8420/mascot3d** — add this as an OBS Browser Source (1920x1080, transparent background).
 
 ---
 
@@ -163,7 +248,7 @@ All settings live in `.env` (copy from `.env.example`):
 |----------|---------|-------------|
 | `GROQ_API_KEY` | — | Groq cloud API key (primary LLM + STT) |
 | `GROQ_MODEL` | `llama-3.3-70b-versatile` | Primary LLM model |
-| `GEMINI_API_KEY` | — | Google Gemini API key (vision + fallback LLM) |
+| `GEMINI_API_KEY` | — | Google Gemini API key (vision only) |
 | `GEMINI_MODEL` | `gemini-2.0-flash` | Gemini model |
 | `OLLAMA_MODEL` | `qwen2.5:3b` | Local fallback model (auto-downloaded) |
 | `OLLAMA_NUM_CTX` | `2048` | Ollama context window |
@@ -185,26 +270,26 @@ All settings live in `.env` (copy from `.env.example`):
 
 ```
 Tarkov_AI_Frriend/
-├── main.py                  # Entry point — headless voice engine orchestrator
-├── brain.py                 # Triple-engine LLM (Groq → Gemini → Ollama)
+├── main.py                  # Entry point — orchestrator, screen-driven reactions
+├── brain.py                 # Dual-engine LLM (Groq → Ollama), personality, death roasts
 ├── voice_input.py           # Silero VAD + Whisper STT + noise reduction
 ├── voice_output.py          # edge-tts + Kokoro TTS + lip-sync amplitude
-├── mascot_server.py         # FastAPI + WebSocket server (port 8420)
-├── expression_engine.py     # 12-emotion state machine + gesture prompts
-├── sound_effects.py         # Programmatic tactical SFX (numpy-generated)
-├── video_capture.py         # Screen capture + Gemini Vision integration
-├── tarkov_data.py           # Tarkov knowledge base (quests, ammo, maps)
+├── mascot_server.py         # FastAPI + WebSocket, dashboard, danger/macro broadcast
+├── expression_engine.py     # 12-emotion state machine + DangerLevel assessment
+├── sound_effects.py         # Contextual SFX: kill, death, loot, extract + tactical
+├── video_capture.py         # DXGI screen capture + Gemini Vision integration
+├── tarkov_data.py           # Tarkov knowledge base (quests, ammo, maps, bosses)
 ├── tarkov_updater.py        # Live data from tarkov.dev GraphQL API
-├── twitch_bot.py            # Twitch chat bot (TwitchIO)
+├── twitch_bot.py            # TwitchIO bot — 16 commands with cooldowns
 ├── logging_config.py        # Rotating file + console logging
 ├── requirements.txt         # Python dependencies
 ├── .env.example             # Configuration template
 ├── assets/
-│   ├── mascot_3d.html       # 3D mascot overlay (Three.js + FBX animations)
+│   ├── mascot_3d.html       # 3D mascot overlay (Three.js + idle anims + danger)
 │   ├── mascot.html          # 2D sprite fallback overlay
-│   ├── dashboard_ui.html    # Web control panel
+│   ├── dashboard_ui.html    # Web dashboard (personality, stats, macros)
 │   ├── sprites/             # 2D emotion sprites (8 PNGs)
-│   └── animations/          # Mixamo FBX animation files (10 FBX)
+│   └── animations/          # Mixamo FBX animation files (12 FBX)
 ├── models/
 │   ├── altyn_boss.fbx       # 3D character model (23MB)
 │   ├── rpk_gold.glb         # Gold RPK weapon model (8MB)
@@ -212,7 +297,7 @@ Tarkov_AI_Frriend/
 │   └── voices-v1.0.bin      # Kokoro voice embeddings (27MB)
 └── tests/
     ├── test_stress.py       # Stress + integration tests
-    └── test_units.py        # Unit tests for pure-function logic
+    └── test_units.py        # Unit tests (54 tests)
 ```
 
 ---
@@ -225,12 +310,13 @@ Tarkov_AI_Frriend/
 ### Concurrency Architecture
 - **6 concurrent threads**: main loop, mic listener, screen analysis, Twitch bot, mascot server, Whisper model loading
 - **Thread-safe guards**: `_processing_lock` prevents parallel LLM calls, `_toggle_lock` prevents duplicate listen threads
-- **Shared interrupt event**: coordinates barge-in between VoiceInput ↔ VoiceOutput across threads
+- **Shared interrupt event**: coordinates barge-in between VoiceInput and VoiceOutput across threads
+- **Lock-protected memory**: deque-based conversation history with `_memory_lock` for compound operations
 
 ### Voice Pipeline Engineering
 - **Callback-based audio capture** (not blocking `stream.read()`) — prevents indefinite hangs when mic hardware stalls after TTS
 - **Pre-buffer**: 10 chunks (1s) of audio saved before speech onset — captures the first syllable that would be lost
-- **Neural VAD → RMS fallback**: Silero VAD runs ~1ms per 512-sample window; falls back to RMS + spectral flatness if torch unavailable
+- **Neural VAD to RMS fallback**: Silero VAD runs ~1ms per 512-sample window; falls back to RMS + spectral flatness if torch unavailable
 - **Sentence-by-sentence streaming**: TTS speaks each sentence as it arrives from the LLM — no waiting for full response
 
 ### LLM Failover System
@@ -238,6 +324,12 @@ Tarkov_AI_Frriend/
 - **Automatic restore**: background timers restore higher-priority engines after cooldown expires
 - **Context injection**: quest/ammo/map data injected only when keyword-triggered (saves tokens)
 - **Memory compression**: when conversation exceeds 8 messages, oldest half is summarized to a single message
+
+### Vision + Danger Pipeline
+- **Confidence scoring**: filters out menu screens, loading screens, and lobby states to prevent false positives
+- **Danger assessment**: regex keyword matching classifies screen state into 4 danger levels
+- **Temperature adjustment**: LLM temperature scales with danger level (0.7 calm to 0.9 combat)
+- **Screen-driven movement**: mascot navigates toward detected action areas
 
 ### Audio Quality
 - **Dynamic range compression** (soft-knee, 3:1 ratio above 0.7 threshold)
@@ -254,10 +346,16 @@ Tarkov_AI_Frriend/
 | Issue | Solution |
 |-------|----------|
 | **No microphone detected** | Grant mic permission in System Settings. Check `python -c "import sounddevice; print(sounddevice.query_devices())"` |
-| **Groq rate limit** | Normal on free tier (30 RPM). Auto-falls back to Gemini → Ollama. Wait ~60s. |
+| **Groq rate limit** | Normal on free tier (30 RPM). Auto-falls back to Ollama. Wait ~60s. |
 | **First run slow** | Whisper model downloads on first use (~500MB for `small`). Cached after that. |
-| **macOS screen capture** | Grant Screen Recording permission in System Settings → Privacy & Security |
+| **macOS screen capture** | Grant Screen Recording permission in System Settings |
 | **`pip install` fails (Windows)** | Install [Visual C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) first |
+
+---
+
+## Status
+
+This project is in **active development**. Core systems are production-ready and deployed for personal streaming use. New features and refinements are being added continuously.
 
 ---
 

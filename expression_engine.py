@@ -6,9 +6,10 @@ selection for the holographic avatar.  Provides a single source of truth
 for which face to display in every situation.
 
 Architecture:
-  • 10 emotion categories   → detected from LLM output text
+  • 12 emotion categories   → detected from LLM output text
   • 14 sprite keys          → individual face images
   • Priority & decay system → high-energy emotions override low ones
+  • Danger intensity levels → LOW / MEDIUM / HIGH from vision context
   • LLM self-awareness      → prompt fragment teaches the agent its own faces
 """
 
@@ -37,6 +38,64 @@ class Emotion(str, Enum):
     EMPATHETIC = "empathetic"
     FOCUSED    = "focused"      # analyzing screen / deep concentration
     ALARMED    = "alarmed"      # danger detected from screen capture
+
+
+# ═════════════════════════════════════════════════════════════════════
+# Danger Intensity — vision-driven threat assessment
+# ═════════════════════════════════════════════════════════════════════
+class DangerLevel(str, Enum):
+    """Threat intensity detected from screen analysis."""
+    NONE = "none"
+    LOW = "low"        # looting, quiet movement — chill tone
+    MEDIUM = "medium"  # enemy spotted, not shooting — alert tone
+    HIGH = "high"      # active firefight, bleeding, grenade — panicked tone
+
+
+_DANGER_HIGH_KEYWORDS = re.compile(
+    r"\b(combat|fight|shooting|firefight|taking\s+fire|grenade|explosion|"
+    r"heavy\s+bleed|dying|killed|dead|headshot|ambush|rushed|pinned)\b",
+    re.IGNORECASE,
+)
+_DANGER_MEDIUM_KEYWORDS = re.compile(
+    r"\b(enemy|spotted|movement|footsteps|suspicious|caution|"
+    r"someone|player|pmc|scav|sniper|boss|close|nearby)\b",
+    re.IGNORECASE,
+)
+_DANGER_LOW_KEYWORDS = re.compile(
+    r"\b(looting|searching|healing|quiet|safe|clear|extracting|"
+    r"inventory|stash|hideout|menu|trading|buying|selling)\b",
+    re.IGNORECASE,
+)
+
+
+def assess_danger(vision_text: str) -> DangerLevel:
+    """Assess danger intensity from vision description text.
+
+    Checks for HIGH keywords first (most urgent), then MEDIUM, then LOW.
+    Returns NONE if no danger-related keywords found.
+    """
+    if not vision_text:
+        return DangerLevel.NONE
+    if _DANGER_HIGH_KEYWORDS.search(vision_text):
+        return DangerLevel.HIGH
+    if _DANGER_MEDIUM_KEYWORDS.search(vision_text):
+        return DangerLevel.MEDIUM
+    if _DANGER_LOW_KEYWORDS.search(vision_text):
+        return DangerLevel.LOW
+    return DangerLevel.NONE
+
+
+_DANGER_EMOTION_MAP = {
+    DangerLevel.NONE: Emotion.NEUTRAL,
+    DangerLevel.LOW: Emotion.FOCUSED,
+    DangerLevel.MEDIUM: Emotion.CONCERNED,
+    DangerLevel.HIGH: Emotion.ALARMED,
+}
+
+
+def danger_to_emotion(level: DangerLevel) -> Emotion:
+    """Convert a danger level to the appropriate mascot emotion."""
+    return _DANGER_EMOTION_MAP.get(level, Emotion.NEUTRAL)
 
 
 # ═════════════════════════════════════════════════════════════════════
@@ -377,6 +436,7 @@ class ExpressionEngine:
 # LLM Self-Awareness Prompt
 # ═════════════════════════════════════════════════════════════════════
 LLM_EXPRESSION_PROMPT = (
+    "<expressions>\n"
     "EXPRESSION SYSTEM (your face changes based on what you say):\n"
     "Your holographic avatar has expressive face states that change automatically "
     "based on the emotion detected in your words. Use naturally expressive language "
@@ -395,12 +455,14 @@ LLM_EXPRESSION_PROMPT = (
     "- EMPATHETIC (gentle concern): 'that sucks', 'I feel you', consoling\n\n"
     "Be EXPRESSIVE! Use varied emotional language so your face actually moves "
     "and reacts. Do NOT be monotone — your audience watches your face.\n"
+    "</expressions>\n\n"
 )
 
 # ═════════════════════════════════════════════════════════════════════
 # LLM Gesture Prompt — teaches the AI to trigger body gestures
 # ═════════════════════════════════════════════════════════════════════
 LLM_GESTURE_PROMPT = (
+    "<gestures>\n"
     "GESTURE SYSTEM (your avatar can perform body animations):\n"
     "You have a 3D avatar body with motion-captured animations. "
     "To perform a gesture, put [gesture:NAME] "
@@ -424,5 +486,6 @@ LLM_GESTURE_PROMPT = (
     "- Show respect → [gesture:salute] o7 commander\n"
     "- Player dies → [gesture:die] That's it for me...\n"
     "- Do not force gestures, only use when natural.\n"
+    "</gestures>\n"
 )
 

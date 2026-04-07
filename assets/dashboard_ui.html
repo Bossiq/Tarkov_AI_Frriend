@@ -741,6 +741,49 @@
                     <button class="btn" onclick="navigate('random')">🎲 Random</button>
                 </div>
             </div>
+
+            <div class="ctrl-section">
+                <div class="ctrl-label">Macros</div>
+                <div class="ctrl-grid ctrl-grid-4">
+                    <button class="btn btn-accent" onclick="triggerMacro(['dance','clap','wave'])">🎉 Celebrate</button>
+                    <button class="btn" onclick="triggerMacro(['think','shrug'])">🤷 Confused</button>
+                    <button class="btn" onclick="triggerMacro(['crouch','think','salute'])">🎖️ Tactical</button>
+                    <button class="btn btn-danger" onclick="triggerMacro(['die','shrug','wave'])">💀 Dramatic</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- PERSONALITY & STREAM STATS -->
+        <div class="card">
+            <div class="card-title"><span class="icon">🎭</span> Personality & Stats</div>
+
+            <div class="ctrl-section">
+                <div class="ctrl-label">Personality Mode</div>
+                <div class="ctrl-grid ctrl-grid-4">
+                    <button class="btn btn-accent" id="btnHype" onclick="setPersonality('hype')">🔥 Hype</button>
+                    <button class="btn" id="btnTactical" onclick="setPersonality('tactical')">🎯 Tactical</button>
+                    <button class="btn" id="btnComedy" onclick="setPersonality('comedy')">😂 Comedy</button>
+                </div>
+            </div>
+
+            <div class="ctrl-section">
+                <div class="ctrl-label">Stream Stats</div>
+                <div class="screen-stat">
+                    <span class="stat-icon">💀</span>
+                    <span class="stat-text">Deaths</span>
+                    <span class="stat-val" id="deathCount">0</span>
+                </div>
+                <div class="screen-stat">
+                    <span class="stat-icon">🎯</span>
+                    <span class="stat-text">Kills</span>
+                    <span class="stat-val" id="killCount">0</span>
+                </div>
+                <div class="screen-stat">
+                    <span class="stat-icon">⚠️</span>
+                    <span class="stat-text">Danger Level</span>
+                    <span class="stat-val" id="dangerLevel">NONE</span>
+                </div>
+            </div>
         </div>
 
         <!-- SYSTEM INFO -->
@@ -880,6 +923,24 @@
                 case 'chat':
                     addLog('twitch', `[${msg.value.user}] ${msg.value.message}`);
                     break;
+                case 'danger':
+                    const dl = document.getElementById('dangerLevel');
+                    if (dl) {
+                        dl.textContent = msg.value.toUpperCase();
+                        dl.style.color = {'none':'var(--muted)','low':'var(--green)','medium':'var(--yellow)','high':'var(--red)'}[msg.value] || 'var(--muted)';
+                    }
+                    break;
+                case 'stats':
+                    if (msg.value) {
+                        const dc = document.getElementById('deathCount');
+                        const kc = document.getElementById('killCount');
+                        if (dc) dc.textContent = msg.value.deaths || 0;
+                        if (kc) kc.textContent = msg.value.kills || 0;
+                    }
+                    break;
+                case 'personality':
+                    highlightPersonality(msg.value);
+                    break;
             }
         }
 
@@ -920,6 +981,22 @@
                 // Version
                 if (d.version) {
                     document.getElementById('versionBadge').textContent = `v${d.version}`;
+                }
+
+                // Stream stats
+                if (d.deaths !== undefined) {
+                    const dc = document.getElementById('deathCount');
+                    const kc = document.getElementById('killCount');
+                    if (dc) dc.textContent = d.deaths;
+                    if (kc) kc.textContent = d.kills || 0;
+                }
+                if (d.personality) highlightPersonality(d.personality);
+                if (d.danger) {
+                    const dl = document.getElementById('dangerLevel');
+                    if (dl) {
+                        dl.textContent = d.danger.toUpperCase();
+                        dl.style.color = {'none':'var(--muted)','low':'var(--green)','medium':'var(--yellow)','high':'var(--red)'}[d.danger] || 'var(--muted)';
+                    }
                 }
 
             } catch (e) {}
@@ -1035,6 +1112,31 @@
                 ws.send(JSON.stringify({ type: 'trigger_navigate', value: dir }));
                 addLog('system', `📍 Move: ${dir}`);
             }
+        }
+
+        function triggerMacro(anims) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'trigger_macro', value: anims }));
+                addLog('system', `🎬 Macro: ${anims.join(' → ')}`);
+            }
+        }
+
+        function setPersonality(mode) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'set_personality', value: mode }));
+                addLog('system', `🎭 Personality: ${mode}`);
+                highlightPersonality(mode);
+            }
+        }
+
+        function highlightPersonality(mode) {
+            ['btnHype', 'btnTactical', 'btnComedy'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.classList.remove('btn-accent');
+            });
+            const map = { hype: 'btnHype', tactical: 'btnTactical', comedy: 'btnComedy' };
+            const active = document.getElementById(map[mode]);
+            if (active) active.classList.add('btn-accent');
         }
 
         /* ── INIT ─────────────────────────────────────────────── */

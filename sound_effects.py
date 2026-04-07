@@ -6,7 +6,8 @@ Effects are generated programmatically using numpy (sine waves + filters)
 to avoid copyrighted audio.
 
 Features:
-  • Event-based: startup, thinking, respond, twitch, barge-in, error
+  • Event-based: startup, thinking, respond, twitch, barge-in, error,
+    kill, death, loot, extract
   • Non-blocking playback via sounddevice
   • Per-effect cooldown (prevents rapid-fire spam)
   • Volume control via SFX_VOLUME env var
@@ -43,6 +44,10 @@ _COOLDOWNS = {
     "twitch": 1.5,
     "bargein": 1.0,
     "error": 3.0,
+    "kill": 2.0,
+    "death": 3.0,
+    "loot": 2.0,
+    "extract": 5.0,
 }
 
 
@@ -112,6 +117,41 @@ def _generate_error_sfx() -> np.ndarray:
     return np.concatenate([note1, gap, note2])
 
 
+def _generate_kill_sfx() -> np.ndarray:
+    """Kill confirmed: sharp ascending triple chime."""
+    note1 = _generate_tone(659.25, 0.06, 0.22, fade_out=0.02)  # E5
+    gap = np.zeros(int(_SAMPLERATE * 0.02), dtype=np.float32)
+    note2 = _generate_tone(783.99, 0.06, 0.25, fade_out=0.02)  # G5
+    note3 = _generate_tone(1046.50, 0.12, 0.28, fade_out=0.06)  # C6
+    return np.concatenate([note1, gap, note2, gap, note3])
+
+
+def _generate_death_sfx() -> np.ndarray:
+    """Death buzzer: descending three-note with longer decay."""
+    note1 = _generate_tone(392.00, 0.08, 0.20, fade_out=0.03)   # G4
+    note2 = _generate_tone(293.66, 0.10, 0.18, fade_out=0.04)   # D4
+    note3 = _generate_tone(196.00, 0.18, 0.15, fade_out=0.10)   # G3
+    return np.concatenate([note1, note2, note3])
+
+
+def _generate_loot_sfx() -> np.ndarray:
+    """Loot sparkle: quick shimmering two-note."""
+    note1 = _generate_tone(1174.66, 0.05, 0.15, fade_out=0.02)  # D6
+    gap = np.zeros(int(_SAMPLERATE * 0.03), dtype=np.float32)
+    note2 = _generate_tone(1396.91, 0.08, 0.18, fade_out=0.04)  # F6
+    return np.concatenate([note1, gap, note2])
+
+
+def _generate_extract_sfx() -> np.ndarray:
+    """Extract success: triumphant ascending four-note fanfare."""
+    note1 = _generate_tone(523.25, 0.10, 0.18, fade_out=0.02)  # C5
+    gap = np.zeros(int(_SAMPLERATE * 0.03), dtype=np.float32)
+    note2 = _generate_tone(659.25, 0.10, 0.20, fade_out=0.02)  # E5
+    note3 = _generate_tone(783.99, 0.10, 0.22, fade_out=0.02)  # G5
+    note4 = _generate_tone(1046.50, 0.20, 0.25, fade_out=0.10)  # C6
+    return np.concatenate([note1, gap, note2, gap, note3, gap, note4])
+
+
 # Generator registry
 _GENERATORS = {
     "startup": _generate_startup_sfx,
@@ -120,6 +160,10 @@ _GENERATORS = {
     "twitch": _generate_twitch_sfx,
     "bargein": _generate_bargein_sfx,
     "error": _generate_error_sfx,
+    "kill": _generate_kill_sfx,
+    "death": _generate_death_sfx,
+    "loot": _generate_loot_sfx,
+    "extract": _generate_extract_sfx,
 }
 
 
@@ -247,7 +291,7 @@ if __name__ == "__main__":
 
     sfx = SoundEffects(enabled=True, volume=0.6)
     print("Playing SFX demo...")
-    for event in ["startup", "thinking", "respond", "twitch", "bargein", "error"]:
+    for event in _GENERATORS:
         print(f"  {event}")
         sfx.play(event)
         time.sleep(0.8)

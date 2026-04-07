@@ -18,6 +18,10 @@ Commands:
   !win           — mascot victory pose
   !ask <text>    — ask the AI a question directly
   !status        — show AI engine status + uptime
+  !personality   — switch personality mode (hype/tactical/comedy)
+  !deaths        — show death/kill count this stream
+  !celebrate     — trigger celebration macro (dance + clap + wave)
+  !macro <list>  — play animation sequence (e.g., !macro dance,clap,wave)
 """
 
 import asyncio
@@ -93,23 +97,34 @@ class TwitchBot(commands.Bot):
         if message.echo:
             return
 
-        logger.debug(
-            "[%s] %s: %s",
-            message.channel.name,
-            message.author.name,
-            message.content,
-        )
-
-        # Forward to AI for potential response
-        if self._message_callback:
-            if asyncio.iscoroutinefunction(self._message_callback):
-                await self._message_callback(message.author.name, message.content)
-            else:
-                self._message_callback(message.author.name, message.content)
-
-        # Forward to mascot for chat bubble display
+        # Forward to mascot for chat bubble display (always)
         if self._mascot_ref and hasattr(self._mascot_ref, 'send_chat_event'):
             self._mascot_ref.send_chat_event(message.author.name, message.content)
+
+        # Only forward to AI if it contains Tarkov keywords or bot mention,
+        # AND is not a standard command (commands handle their own forwarding)
+        content_lower = message.content.lower()
+        if not content_lower.startswith("!"):
+            tarkov_keywords = [
+                "tarkov", "quest", "raid", "ammo", "gun", "boss", "flea", "wipe",
+                "PMC", "scav", "loot", "extract", "prapor", "therapist", "skier",
+                "peacekeeper", "mechanic", "ragman", "jaeger", "fence"
+            ]
+            
+            is_relevant = any(k in content_lower for k in tarkov_keywords)
+            # Also reply if someone asks a question out loud with "ai" or "bot"
+            if " ai " in content_lower or " bot " in content_lower or "@" in content_lower:
+                is_relevant = True
+
+            if is_relevant:
+                logger.info("Forwarding relevant Twitch chat from %s", message.author.name)
+                if self._message_callback:
+                    if asyncio.iscoroutinefunction(self._message_callback):
+                        await self._message_callback(message.author.name, message.content)
+                    else:
+                        self._message_callback(message.author.name, message.content)
+            else:
+                logger.debug("Filtered irrelevant Twitch chat from %s", message.author.name)
 
         await self.handle_commands(message)
 
@@ -221,6 +236,67 @@ class TwitchBot(commands.Bot):
             else:
                 self._message_callback(ctx.author.name, question)
             logger.info("Twitch !ask by %s: %s", ctx.author.name, question[:60])
+
+    @commands.command()
+    async def personality(self, ctx: commands.Context) -> None:
+        """Switch personality mode: !personality hype/tactical/comedy"""
+        if not self._check_cooldown(ctx.author.name, "personality"):
+            return
+        parts = ctx.message.content.split(maxsplit=1)
+        mode = parts[1].strip().lower() if len(parts) > 1 else ""
+        if mode not in ("hype", "tactical", "comedy"):
+            await ctx.send(f"@{ctx.author.name} Use: !personality hype/tactical/comedy")
+            return
+        if self._system_ref and hasattr(self._system_ref, '_brain'):
+            brain = self._system_ref._brain
+            if brain and brain.set_personality_mode(mode):
+                if self._mascot_ref and hasattr(self._mascot_ref, 'send_personality'):
+                    self._mascot_ref.send_personality(mode)
+                await ctx.send(f"Personality switched to {mode.upper()} mode!")
+                logger.info("Twitch !personality %s by %s", mode, ctx.author.name)
+
+    @commands.command()
+    async def deaths(self, ctx: commands.Context) -> None:
+        """Show stream death/kill stats."""
+        if not self._check_cooldown(ctx.author.name, "deaths"):
+            return
+        if self._system_ref and hasattr(self._system_ref, '_brain'):
+            brain = self._system_ref._brain
+            if brain:
+                d, k = brain.death_count, brain.kill_count
+                kd = f"{k/d:.1f}" if d > 0 else "perfect"
+                await ctx.send(f"Stream stats: {k} kills / {d} deaths (K/D: {kd})")
+                return
+        await ctx.send("No stats tracked yet!")
+
+    @commands.command()
+    async def celebrate(self, ctx: commands.Context) -> None:
+        """Trigger a celebration animation macro."""
+        if not self._check_cooldown(ctx.author.name, "celebrate"):
+            return
+        if self._mascot_ref and hasattr(self._mascot_ref, 'send_macro'):
+            self._mascot_ref.send_macro(["dance", "clap", "wave"])
+            logger.info("Twitch !celebrate by %s", ctx.author.name)
+
+    @commands.command()
+    async def macro(self, ctx: commands.Context) -> None:
+        """Play an animation sequence: !macro dance,clap,wave"""
+        if not self._check_cooldown(ctx.author.name, "macro"):
+            return
+        parts = ctx.message.content.split(maxsplit=1)
+        if len(parts) < 2:
+            await ctx.send(f"@{ctx.author.name} Use: !macro dance,clap,wave")
+            return
+        valid = {"wave", "think", "shrug", "clap", "dance", "salute", "win", "crouch", "die"}
+        anims = [a.strip() for a in parts[1].split(",") if a.strip() in valid]
+        if not anims:
+            await ctx.send(f"@{ctx.author.name} No valid animations. Options: {', '.join(sorted(valid))}")
+            return
+        if len(anims) > 5:
+            anims = anims[:5]  # cap at 5 to prevent spam
+        if self._mascot_ref and hasattr(self._mascot_ref, 'send_macro'):
+            self._mascot_ref.send_macro(anims)
+            logger.info("Twitch !macro %s by %s", anims, ctx.author.name)
 
     @commands.command()
     async def status(self, ctx: commands.Context) -> None:

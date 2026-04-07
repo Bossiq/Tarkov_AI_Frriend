@@ -93,7 +93,7 @@ sys.excepthook = _crash_handler
 threading.excepthook = _thread_crash_handler
 
 from brain import Brain  # noqa: E402
-from expression_engine import detect_expression, Emotion  # noqa: E402
+from expression_engine import detect_expression, Emotion, assess_danger, DangerLevel  # noqa: E402
 from mascot_server import MascotServer  # noqa: E402
 from video_capture import ScreenCapture  # noqa: E402
 from voice_input import VoiceInput  # noqa: E402
@@ -101,7 +101,7 @@ from voice_output import VoiceOutput  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
-__version__ = "0.29.0"
+__version__ = "0.30.0"
 
 
 class PMCOverwatch:
@@ -360,6 +360,8 @@ class PMCOverwatch:
             self.log(f"[Brain] Online ({engine}: {model})")
             self._brain._warmup()
             self.log("[Brain] Model ready (warm)")
+            self._mascot.set_brain(self._brain)
+            self._mascot.send_personality(self._brain.personality_mode)
         except ConnectionError as exc:
             self.log(f"[!] Brain init failed: {exc}")
             logger.error("Brain init failed: %s", exc)
@@ -410,8 +412,24 @@ class PMCOverwatch:
             self._start_keyboard_listener()
 
     def stop(self) -> None:
-        """Stop all subsystems."""
+        """Stop all subsystems. Generates stream recap if brain is available."""
         self._running = False
+
+        # Generate stream recap before shutting down
+        if self._brain and (self._brain.death_count > 0 or self._brain.kill_count > 0):
+            try:
+                recap_prompt = self._brain.generate_stream_recap()
+                self.log("[PMC] Generating stream recap...")
+                self._mascot.set_mode("speaking")
+                for sentence in self._brain.stream_sentences(recap_prompt):
+                    self.log(f"[Recap] {sentence}")
+                    self._mascot.set_subtitle(sentence)
+                    self._vo.speak_streamed(iter([sentence]))
+                self._mascot.set_subtitle("")
+                self._mascot.set_mode("idle")
+            except Exception:
+                logger.debug("Stream recap failed", exc_info=True)
+
         self._shutdown.set()
         self._screen.stop()
         self._mascot.stop()
@@ -574,6 +592,41 @@ class PMCOverwatch:
             try:
                 # Update cache + optionally get a reaction
                 reaction = self._brain.update_vision_cache(frame_path)
+
+                # Broadcast danger level for mascot behavior
+                danger = self._brain.danger_level
+                self._mascot.send_danger_level(danger.value)
+
+                # Screen-driven movement: move mascot based on danger
+                if danger == DangerLevel.HIGH:
+                    self._mascot.send_navigate("random")  # erratic movement in combat
+                elif danger == DangerLevel.MEDIUM:
+                    self._mascot.send_animation("crouch")  # take cover
+
+                # Detect death/kill events from vision cache description
+                cached_desc = self._brain.cached_screen_context.lower()
+                if any(kw in cached_desc for kw in ("you died", "killed in action", "dead body", "death screen")):
+                    death_prompt = self._brain.record_death()
+                    self._mascot.send_stats(self._brain.death_count, self._brain.kill_count)
+                    if self._sfx:
+                        self._sfx.play("death")
+                    if death_prompt and not reaction:
+                        # Generate death reaction using the roast system
+                        reaction = next(self._brain.stream_sentences(death_prompt), None)
+                elif any(kw in cached_desc for kw in ("kill confirmed", "enemy down", "got the kill")):
+                    self._brain.record_kill()
+                    self._mascot.send_stats(self._brain.death_count, self._brain.kill_count)
+                    if self._sfx:
+                        self._sfx.play("kill")
+                    self._mascot.send_animation("win")
+                elif any(kw in cached_desc for kw in ("looting", "found", "picked up", "rare item")):
+                    if self._sfx:
+                        self._sfx.play("loot")
+                elif any(kw in cached_desc for kw in ("extracting", "extraction", "survived")):
+                    if self._sfx:
+                        self._sfx.play("extract")
+                    self._mascot.send_macro(["win", "dance", "wave"])
+
                 if reaction:
                     self.log(f"[PMC] {reaction}")
                     self._mascot.set_mode("speaking")
@@ -669,12 +722,6 @@ class PMCOverwatch:
         if not text_prompt:
             return
 
-        # ── Add cached screen context (NO API call — reads from cache) ──
-        if self._screen_enabled:
-            screen_ctx = self._brain.get_screen_context()
-            if screen_ctx:
-                text_prompt += screen_ctx
-
         # ── Stream response ───────────────────────────────────────────
         self._mascot.set_mode("thinking")
         self.log("[Brain] Generating response...")
@@ -764,7 +811,7 @@ class PMCOverwatch:
 
     # ── Status provider (for dashboard) ───────────────────────────────
     def _get_status(self) -> dict:
-        return {
+        status = {
             "running": self._running,
             "engine": self._brain._engine if self._brain else "none",
             "model": self._brain._model if self._brain else "none",
@@ -773,6 +820,14 @@ class PMCOverwatch:
             "input_mode": self._input_mode,
             "version": __version__,
         }
+        if self._brain:
+            status.update({
+                "deaths": self._brain.death_count,
+                "kills": self._brain.kill_count,
+                "personality": self._brain.personality_mode,
+                "danger": self._brain.danger_level.value,
+            })
+        return status
 
 
 # ── Entry point ──────────────────────────────────────────────────────
